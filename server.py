@@ -1,0 +1,624 @@
+#!/usr/bin/env python3
+"""
+RappelConso — server.py
+Serveur HTTP local + proxy API + envoi d'alertes email
+Authentification : Basic Auth (APP_USER / APP_PASS)
+"""
+
+import http.server
+import socketserver
+import os
+import sys
+import json
+import sqlite3
+import smtplib
+import threading
+import time
+import webbrowser
+import urllib.request
+import urllib.parse
+import ssl
+import pathlib
+import base64
+from datetime import datetime, timezone, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+
+
+# ──────────────────────────────────────────────
+# HELPERS
+# ──────────────────────────────────────────────
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+# ──────────────────────────────────────────────
+# PROXY CACHE
+# ──────────────────────────────────────────────
+
+REMOTE_API    = 'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/rappelconso-v2-gtin-espaces'
+PROXY_TTL     = 600  # secondes
+_proxy_cache  = {}   # url -> (timestamp, data_bytes)
+_proxy_pending = set()
+
+_ssl_ctx_proxy = ssl.create_default_context()
+_ssl_ctx_proxy.check_hostname = False
+_ssl_ctx_proxy.verify_mode    = ssl.CERT_NONE
+
+
+def _normalize_url(url):
+    """Trier les paramètres pour une clé de cache stable."""
+    parsed = urllib.parse.urlparse(url)
+    params = sorted(urllib.parse.parse_qsl(parsed.query))
+    new_query = urllib.parse.urlencode(params)
+    return parsed._replace(query=new_query).geturl()
+
+
+def _do_fetch(url, cache_key):
+    """Fetch HTTP bloquant, stocke en cache."""
+    try:
+        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, context=_ssl_ctx_proxy, timeout=30) as resp:
+            data = resp.read()
+        _proxy_cache[cache_key] = (time.time(), data)
+    except Exception as exc:
+        print(f'[proxy] fetch error {url}: {exc}', file=sys.stderr)
+    finally:
+        _proxy_pending.discard(cache_key)
+
+
+def proxy_fetch_async(url):
+    """
+    Retourne (data_bytes, from_cache) si en cache valide.
+    Sinon lance un fetch en background et retourne (None, False).
+    """
+    key = _normalize_url(url)
+    if key in _proxy_cache:
+        ts, data = _proxy_cache[key]
+        if time.time() - ts < PROXY_TTL:
+            return data, True
+    if key not in _proxy_pending:
+        _proxy_pending.add(key)
+        threading.Thread(target=_do_fetch, args=(url, key), daemon=True).start()
+    return None, False
+
+
+PRELOAD_URLS = [
+    f'{REMOTE_API}/records?limit=20&order_by=date_de_publication+DESC&timezone=Europe%2FParis',
+    f'{REMOTE_API}/facets?limit=1&facet=categorie_de_produit&timezone=Europe%2FParis',
+]
+
+
+def preload_cache():
+    for url in PRELOAD_URLS:
+        proxy_fetch_async(url)
+
+
+# ──────────────────────────────────────────────
+# CONFIG
+# ──────────────────────────────────────────────
+
+PORT    = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get('PORT', 8080))
+APP_DIR = pathlib.Path(__file__).parent / 'app'
+DB_PATH = pathlib.Path(__file__).parent / 'alerts.db'
+
+
+def load_env():
+    """Lit .env si présent et injecte dans os.environ."""
+    env_path = pathlib.Path(__file__).parent / '.env'
+    if not env_path.exists():
+        return
+    with open(env_path, encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, val = line.partition('=')
+            os.environ.setdefault(key.strip(), val.strip())
+
+
+load_env()
+
+SMTP_HOST = os.environ.get('SMTP_HOST', '')
+SMTP_PORT = int(os.environ.get('SMTP_PORT', 587))
+SMTP_USER = os.environ.get('SMTP_USER', '')
+SMTP_PASS = os.environ.get('SMTP_PASS', '')
+SMTP_FROM = os.environ.get('SMTP_FROM', SMTP_USER)
+
+APP_USER  = os.environ.get('APP_USER', 'admin')
+APP_PASS  = os.environ.get('APP_PASS', 'rappelconso2024')
+
+API_BASE  = REMOTE_API
+
+SCHEDULER_INTERVAL = 3600  # secondes
+
+_ssl_ctx = ssl.create_default_context()
+_ssl_ctx.check_hostname = False
+_ssl_ctx.verify_mode    = ssl.CERT_NONE
+
+
+# ──────────────────────────────────────────────
+# SQLITE
+# ──────────────────────────────────────────────
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS alerts (
+                id          TEXT PRIMARY KEY,
+                email       TEXT NOT NULL,
+                name        TEXT NOT NULL,
+                zone        TEXT,
+                distributeur TEXT,
+                categorie   TEXT,
+                keywords    TEXT,
+                freq        TEXT DEFAULT "weekly",
+                next_send   TEXT,
+                created_at  TEXT,
+                last_sent   TEXT
+            )
+        ''')
+        conn.commit()
+
+
+def db_upsert(alert):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute('''
+            INSERT INTO alerts (id, email, name, zone, distributeur, categorie, keywords, freq, next_send, created_at)
+            VALUES (:id, :email, :name, :zone, :distributeur, :categorie, :keywords, :freq, :nextSend, :createdAt)
+            ON CONFLICT(id) DO UPDATE SET
+                email=excluded.email, name=excluded.name,
+                zone=excluded.zone, distributeur=excluded.distributeur,
+                categorie=excluded.categorie, keywords=excluded.keywords,
+                freq=excluded.freq, next_send=excluded.next_send
+        ''', alert)
+        conn.commit()
+
+
+def db_delete(alert_id):
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute('DELETE FROM alerts WHERE id = ?', (alert_id,))
+        conn.commit()
+
+
+def db_all():
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute('SELECT * FROM alerts').fetchall()
+    return [dict(r) for r in rows]
+
+
+def db_mark_sent(alert_id, next_send):
+    now = utcnow().isoformat()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            'UPDATE alerts SET last_sent=?, next_send=? WHERE id=?',
+            (now, next_send, alert_id)
+        )
+        conn.commit()
+
+
+# ──────────────────────────────────────────────
+# RAPPELS API
+# ──────────────────────────────────────────────
+
+def fetch_rappels(alert):
+    clauses = []
+    if alert.get('categorie'):
+        c = alert['categorie'].replace("'", "\\'")
+        clauses.append(f"categorie_de_produit = '{c}'")
+    if alert.get('zone'):
+        z = alert['zone'].replace("'", "\\'")
+        clauses.append(f"zone_geographique_de_vente = '{z}'")
+    if alert.get('distributeur'):
+        d = alert['distributeur'].replace("'", "\\'")
+        clauses.append(f"distributeurs_revendeurs LIKE '%{d}%'")
+    if alert.get('keywords'):
+        for kw in alert['keywords'].split(','):
+            kw = kw.strip().replace("'", "\\'")
+            if kw:
+                clauses.append(
+                    f"(libelle_produit_type LIKE '%{kw}%' OR motif_du_rappel LIKE '%{kw}%' OR nom_de_la_marque_du_produit LIKE '%{kw}%')"
+                )
+
+    # Filtre sur les 7 derniers jours
+    since = (utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%S')
+    clauses.append(f"date_de_publication >= '{since}'")
+
+    where_str = ' AND '.join(clauses)
+    params = urllib.parse.urlencode({
+        'limit':    '50',
+        'order_by': 'date_de_publication DESC',
+        'timezone': 'Europe/Paris',
+        'where':    where_str
+    })
+    url = f'{API_BASE}/records?{params}'
+
+    try:
+        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
+        with urllib.request.urlopen(req, context=_ssl_ctx, timeout=30) as resp:
+            data = json.loads(resp.read())
+        return data.get('results', [])
+    except Exception as exc:
+        print(f'[fetch_rappels] {exc}', file=sys.stderr)
+        return []
+
+
+# ──────────────────────────────────────────────
+# SCHEDULER
+# ──────────────────────────────────────────────
+
+def next_send(freq):
+    now = utcnow()
+    if freq == 'daily':
+        return (now + timedelta(days=1)).isoformat()
+    if freq == 'weekly':
+        return (now + timedelta(weeks=1)).isoformat()
+    if freq == 'monthly':
+        # +30 jours
+        return (now + timedelta(days=30)).isoformat()
+    return (now + timedelta(weeks=1)).isoformat()
+
+
+def scheduler_loop():
+    while True:
+        time.sleep(SCHEDULER_INTERVAL)
+        now_str = utcnow().isoformat()
+        try:
+            alerts = db_all()
+        except Exception:
+            continue
+        for a in alerts:
+            ns = a.get('next_send') or ''
+            if ns and ns <= now_str:
+                try:
+                    rappels = fetch_rappels(a)
+                    if rappels:
+                        html = build_email_html(a, rappels)
+                        subject = f"[RappelConso] {len(rappels)} nouveau(x) rappel(s) — {a.get('name', '')}"
+                        send_email(a['email'], subject, html)
+                    db_mark_sent(a['id'], next_send(a.get('freq', 'weekly')))
+                except Exception as exc:
+                    print(f'[scheduler] alerte {a["id"]} : {exc}', file=sys.stderr)
+
+
+# ──────────────────────────────────────────────
+# EMAIL
+# ──────────────────────────────────────────────
+
+def build_email_html(alert, rappels):
+    rows = ''
+    for r in rappels[:30]:
+        brand   = r.get('nom_de_la_marque_du_produit', '—')
+        product = r.get('libelle_produit_type') or r.get('noms_des_modeles_ou_references', '—')
+        motif   = r.get('motif_du_rappel', '—')
+        date    = (r.get('date_de_publication') or '')[:10]
+        cat     = r.get('categorie_de_produit', '')
+        rows += f'''
+        <tr>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:13px">{esc(brand)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:13px">{esc(product)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:12px;color:#57606a">{esc(cat)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:12px;color:#57606a;white-space:nowrap">{esc(date)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:12px;color:#57606a">{esc((motif or '')[:100])}…</td>
+        </tr>'''
+
+    filters_html = ''
+    for key, label in [('zone','Zone'), ('distributeur','Distributeur'), ('categorie','Catégorie'), ('keywords','Mots-clés')]:
+        val = alert.get(key)
+        if val:
+            filters_html += f'<li style="margin:2px 0;font-size:13px"><strong>{esc(label)} :</strong> {esc(val)}</li>'
+
+    return f'''<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="UTF-8"><title>RappelConso — Alerte</title></head>
+<body style="margin:0;padding:0;background:#f4f5f7;font-family:-apple-system,'Segoe UI',sans-serif">
+<div style="max-width:700px;margin:24px auto;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e2e5ea">
+  <div style="background:#1c2128;padding:16px 24px">
+    <span style="color:#fff;font-size:20px;font-weight:700">RappelConso</span>
+    <span style="color:#8b949e;font-size:13px;margin-left:12px">Alerte : {esc(alert.get("name",""))}</span>
+  </div>
+  <div style="padding:20px 24px">
+    <p style="font-size:15px;color:#1c2128;margin:0 0 16px">
+      <strong>{len(rappels)}</strong> nouveau(x) rappel(s) correspond(ent) à votre alerte.
+    </p>
+    {f'<ul style="margin:0 0 16px;padding-left:18px">{filters_html}</ul>' if filters_html else ''}
+    <table style="width:100%;border-collapse:collapse;border:1px solid #e2e5ea;border-radius:6px;overflow:hidden">
+      <thead>
+        <tr style="background:#f4f5f7">
+          <th style="padding:8px 10px;text-align:left;font-size:12px;color:#57606a;font-weight:600">Marque</th>
+          <th style="padding:8px 10px;text-align:left;font-size:12px;color:#57606a;font-weight:600">Produit</th>
+          <th style="padding:8px 10px;text-align:left;font-size:12px;color:#57606a;font-weight:600">Catégorie</th>
+          <th style="padding:8px 10px;text-align:left;font-size:12px;color:#57606a;font-weight:600">Date</th>
+          <th style="padding:8px 10px;text-align:left;font-size:12px;color:#57606a;font-weight:600">Motif</th>
+        </tr>
+      </thead>
+      <tbody>{rows}</tbody>
+    </table>
+    <p style="margin-top:20px;font-size:12px;color:#57606a">
+      Données officielles DGCCRF — <a href="https://rappelconso.beta.gouv.fr" style="color:#2563eb">rappelconso.beta.gouv.fr</a>
+    </p>
+  </div>
+  <div style="background:#f4f5f7;padding:12px 24px;border-top:1px solid #e2e5ea;font-size:11px;color:#8b949e;text-align:center">
+    Application créée par IBM Bob / Arrow ECS France
+  </div>
+</div>
+</body></html>'''
+
+
+def send_email(to, subject, html):
+    if not SMTP_HOST or not SMTP_USER:
+        raise RuntimeError('SMTP non configuré (SMTP_HOST / SMTP_USER manquants)')
+
+    msg = MIMEMultipart('alternative')
+    msg['Subject'] = subject
+    msg['From']    = SMTP_FROM or SMTP_USER
+    msg['To']      = to
+    msg.attach(MIMEText(html, 'html', 'utf-8'))
+
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
+            smtp.ehlo()
+            smtp.starttls()
+            smtp.ehlo()
+            smtp.login(SMTP_USER, SMTP_PASS)
+            smtp.sendmail(SMTP_FROM or SMTP_USER, to, msg.as_string())
+    except smtplib.SMTPAuthenticationError as e:
+        raise RuntimeError(f'Erreur authentification SMTP : {e}')
+
+
+def esc(s):
+    """Échappe le HTML pour les emails."""
+    return str(s).replace('&','&amp;').replace('<','&lt;').replace('>','&gt;').replace('"','&quot;')
+
+
+# ──────────────────────────────────────────────
+# HTTP HANDLER
+# ──────────────────────────────────────────────
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+
+    def log_message(self, fmt, *args):
+        pass  # silencieux
+
+    # ── AUTH ──────────────────────────────────
+
+    def _check_auth(self):
+        """Vérifie l'authentification Basic. Retourne True si ok."""
+        auth_header = self.headers.get('Authorization', '')
+        if not auth_header.startswith('Basic '):
+            return False
+        try:
+            decoded = base64.b64decode(auth_header[6:]).decode('utf-8')
+            user, _, pwd = decoded.partition(':')
+            return user == APP_USER and pwd == APP_PASS
+        except Exception:
+            return False
+
+    def _require_auth(self):
+        """Envoie une réponse 401 avec WWW-Authenticate."""
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', 'Basic realm="RappelConso"')
+        self._cors_headers()
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(b'Authentication required')
+
+    # ── CORS ──────────────────────────────────
+
+    def _cors_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+
+    # ── HELPERS ───────────────────────────────
+
+    def read_json(self):
+        length = int(self.headers.get('Content-Length', 0))
+        return json.loads(self.rfile.read(length) or b'{}')
+
+    def json_response(self, data, status=200):
+        body = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        self.send_response(status)
+        self._cors_headers()
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def error_response(self, msg, status=400):
+        self.json_response({'error': msg}, status)
+
+    # ── GET ───────────────────────────────────
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        path   = parsed.path
+
+        # Assets statiques → demander auth
+        if not path.startswith('/api/'):
+            if not self._check_auth():
+                self._require_auth()
+                return
+            # Servir le fichier statique
+            super().do_GET()
+            return
+
+        # /api/status
+        if path == '/api/status':
+            self.json_response({
+                'ok':   True,
+                'smtp': bool(SMTP_HOST and SMTP_USER),
+                'time': utcnow().isoformat()
+            })
+            return
+
+        # /api/alerts
+        if path == '/api/alerts':
+            if not self._check_auth():
+                self._require_auth()
+                return
+            try:
+                self.json_response(db_all())
+            except Exception as e:
+                self.error_response(str(e), 500)
+            return
+
+        # /api/proxy
+        if path == '/api/proxy':
+            qs     = urllib.parse.parse_qs(parsed.query)
+            p_path = qs.get('_path', ['/records'])[0]
+            # Reconstituer les params sans _path
+            params = {k: v[0] for k, v in qs.items() if k != '_path'}
+            # Détection facets
+            if p_path == '/facets' or 'facet' in params:
+                endpoint = '/facets'
+            else:
+                endpoint = '/records'
+            remote_url = f'{REMOTE_API}{endpoint}?{urllib.parse.urlencode(params)}'
+
+            data, from_cache = proxy_fetch_async(remote_url)
+            if data is None:
+                # Pas encore en cache → 503 retry
+                self.json_response({'error': 'loading', 'retry_ms': 3000}, 503)
+            else:
+                self.send_response(200)
+                self._cors_headers()
+                self.send_header('Content-Type', 'application/json; charset=utf-8')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+            return
+
+        self.error_response('Not found', 404)
+
+    # ── POST ──────────────────────────────────
+
+    def do_POST(self):
+        if not self._check_auth():
+            self._require_auth()
+            return
+
+        parsed = urllib.parse.urlparse(self.path)
+        path   = parsed.path
+
+        # /api/alerts/:id/send
+        if path.startswith('/api/alerts/') and path.endswith('/send'):
+            alert_id = path.split('/')[-2]
+            alerts   = db_all()
+            alert    = next((a for a in alerts if a['id'] == alert_id), None)
+            if not alert:
+                self.error_response('Alerte introuvable', 404)
+                return
+
+            def do_send():
+                try:
+                    rappels = fetch_rappels(alert)
+                    if not rappels:
+                        return  # rien à envoyer
+                    html    = build_email_html(alert, rappels)
+                    subject = f"[RappelConso] Test — {alert.get('name','')}"
+                    send_email(alert['email'], subject, html)
+                    db_mark_sent(alert['id'], next_send(alert.get('freq','weekly')))
+                except Exception as exc:
+                    print(f'[send] {exc}', file=sys.stderr)
+
+            threading.Thread(target=do_send, daemon=True).start()
+            self.json_response({'ok': True, 'queued': True})
+            return
+
+        # /api/alerts (upsert)
+        if path == '/api/alerts':
+            try:
+                data = self.read_json()
+                db_upsert(data)
+                self.json_response({'ok': True})
+            except Exception as e:
+                self.error_response(str(e), 500)
+            return
+
+        self.error_response('Not found', 404)
+
+    # ── PUT ───────────────────────────────────
+
+    def do_PUT(self):
+        if not self._check_auth():
+            self._require_auth()
+            return
+
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == '/api/alerts':
+            try:
+                data = self.read_json()
+                db_upsert(data)
+                self.json_response({'ok': True})
+            except Exception as e:
+                self.error_response(str(e), 500)
+        else:
+            self.error_response('Not found', 404)
+
+    # ── DELETE ────────────────────────────────
+
+    def do_DELETE(self):
+        if not self._check_auth():
+            self._require_auth()
+            return
+
+        parsed   = urllib.parse.urlparse(self.path)
+        parts    = parsed.path.strip('/').split('/')
+        # /api/alerts/:id
+        if len(parts) == 3 and parts[0] == 'api' and parts[1] == 'alerts':
+            alert_id = parts[2]
+            try:
+                db_delete(alert_id)
+                self.json_response({'ok': True})
+            except Exception as e:
+                self.error_response(str(e), 500)
+        else:
+            self.error_response('Not found', 404)
+
+    # ── OPTIONS ───────────────────────────────
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self._cors_headers()
+        self.end_headers()
+
+
+# ──────────────────────────────────────────────
+# MAIN
+# ──────────────────────────────────────────────
+
+def main():
+    init_db()
+    os.chdir(APP_DIR)
+
+    # Scheduler
+    t_sched = threading.Thread(target=scheduler_loop, daemon=True)
+    t_sched.start()
+
+    # Préchargement cache proxy
+    threading.Thread(target=preload_cache, daemon=True).start()
+
+    url = f'http://localhost:{PORT}'
+    print(f'\n🚀 RappelConso démarre sur {url}')
+    print(f'   Authentification : {APP_USER} / {"*" * len(APP_PASS)}')
+    print(f'   Dossier app      : {APP_DIR}')
+    print(f'   Base de données  : {DB_PATH}')
+    print(f'   SMTP             : {SMTP_HOST or "(non configuré)"}')
+    print(f'\n   → Ouvrir dans le navigateur : {url}\n')
+
+    # Ouvre le navigateur après 1.5s
+    threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+
+    socketserver.TCPServer.allow_reuse_address = True
+    with socketserver.ThreadingTCPServer(('', PORT), Handler) as httpd:
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print('\n⏹  Serveur arrêté.')
+
+
+if __name__ == '__main__':
+    main()

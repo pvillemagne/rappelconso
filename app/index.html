@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>RappelConso — Surveillance des rappels produits</title>
+  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="analytics.css" />
+  <link rel="stylesheet" href="alerts.css" />
+</head>
+<body>
+
+  <!-- TOPBAR -->
+  <div class="topbar">
+    <img src="logo-arrow.png" alt="Arrow ECS" class="topbar-logo topbar-logo--arrow" />
+    <span class="topbar-center">Créé par IBM Bob / Arrow ECS France</span>
+    <img src="logo-ibmbob.png" alt="IBM Bob" class="topbar-logo topbar-logo--ibm" />
+  </div>
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="header-brand">
+        <svg class="header-brand-logo" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <circle cx="30" cy="30" r="28" fill="#e34b2a"/>
+          <rect x="27" y="14" width="6" height="22" rx="3" fill="#fff"/>
+          <circle cx="30" cy="44" r="4" fill="#fff"/>
+        </svg>
+      </div>
+      <div class="header-center">
+        <h1 class="header-title">RappelConso</h1>
+        <p class="header-subtitle">Surveillance des rappels produits en France — données officielles DGCCRF</p>
+      </div>
+      <div class="header-brand header-brand--right"></div>
+    </div>
+  </header>
+
+  <!-- TAB NAV -->
+  <nav class="tab-nav" role="tablist" aria-label="Navigation principale">
+    <button class="tab-btn active" id="tab-search" role="tab" aria-selected="true" aria-controls="panel-search">
+      🔍 Recherche
+    </button>
+    <button class="tab-btn" id="tab-analytics" role="tab" aria-selected="false" aria-controls="panel-analytics">
+      📊 Analyse
+    </button>
+    <button class="tab-btn" id="tab-alerts" role="tab" aria-selected="false" aria-controls="panel-alerts">
+      🔔 Alertes
+    </button>
+  </nav>
+
+  <!-- PANEL RECHERCHE -->
+  <main id="panel-search" class="panel" role="tabpanel" aria-labelledby="tab-search">
+
+    <section class="search-section">
+      <form id="search-form" autocomplete="off" aria-label="Formulaire de recherche">
+        <div class="filters-row">
+
+          <div class="filter-group filter-group--wide">
+            <label for="input-q">Recherche libre</label>
+            <input type="text" id="input-q" name="q" placeholder="marque, produit, motif…" autocomplete="off" />
+          </div>
+
+          <div class="filter-group">
+            <label for="sel-categorie">Catégorie</label>
+            <select id="sel-categorie" name="categorie">
+              <option value="">Toutes catégories</option>
+              <option value="Alimentation">Alimentation</option>
+              <option value="Véhicules et accessoires">Véhicules et accessoires</option>
+              <option value="Électroménager">Électroménager</option>
+              <option value="Jouets et jeux">Jouets et jeux</option>
+              <option value="Cosmétiques et hygiène">Cosmétiques et hygiène</option>
+              <option value="Équipements électriques">Équipements électriques</option>
+              <option value="Textiles et habillement">Textiles et habillement</option>
+              <option value="Matériaux et bricolage">Matériaux et bricolage</option>
+              <option value="Santé et médical">Santé et médical</option>
+              <option value="Animaux">Animaux</option>
+              <option value="Plantes et jardinage">Plantes et jardinage</option>
+              <option value="Sport et loisirs">Sport et loisirs</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="sel-zone">Zone géographique</label>
+            <select id="sel-zone" name="zone">
+              <option value="">France entière</option>
+              <optgroup label="Régions métropolitaines">
+                <option value="Île-de-France">Île-de-France</option>
+                <option value="Auvergne-Rhône-Alpes">Auvergne-Rhône-Alpes</option>
+                <option value="Hauts-de-France">Hauts-de-France</option>
+                <option value="Nouvelle-Aquitaine">Nouvelle-Aquitaine</option>
+                <option value="Occitanie">Occitanie</option>
+                <option value="Grand Est">Grand Est</option>
+                <option value="Provence-Alpes-Côte d'Azur">Provence-Alpes-Côte d'Azur</option>
+                <option value="Pays de la Loire">Pays de la Loire</option>
+                <option value="Normandie">Normandie</option>
+                <option value="Bretagne">Bretagne</option>
+                <option value="Bourgogne-Franche-Comté">Bourgogne-Franche-Comté</option>
+                <option value="Centre-Val de Loire">Centre-Val de Loire</option>
+                <option value="Corse">Corse</option>
+              </optgroup>
+              <optgroup label="DOM-TOM">
+                <option value="Guadeloupe">Guadeloupe</option>
+                <option value="Martinique">Martinique</option>
+                <option value="Guyane">Guyane</option>
+                <option value="La Réunion">La Réunion</option>
+                <option value="Mayotte">Mayotte</option>
+                <option value="Saint-Pierre-et-Miquelon">Saint-Pierre-et-Miquelon</option>
+                <option value="Saint-Barthélemy">Saint-Barthélemy</option>
+                <option value="Saint-Martin">Saint-Martin</option>
+                <option value="Polynésie française">Polynésie française</option>
+                <option value="Nouvelle-Calédonie">Nouvelle-Calédonie</option>
+                <option value="Wallis-et-Futuna">Wallis-et-Futuna</option>
+              </optgroup>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="sel-distributeur">Distributeur</label>
+            <select id="sel-distributeur" name="distributeur">
+              <option value="">Tous distributeurs</option>
+              <option value="Carrefour">Carrefour</option>
+              <option value="Leclerc">Leclerc</option>
+              <option value="Intermarché">Intermarché</option>
+              <option value="Lidl">Lidl</option>
+              <option value="Aldi">Aldi</option>
+              <option value="Auchan">Auchan</option>
+              <option value="Monoprix">Monoprix</option>
+              <option value="Casino">Casino</option>
+              <option value="Franprix">Franprix</option>
+              <option value="Picard">Picard</option>
+              <option value="Système U">Système U</option>
+              <option value="Biocoop">Biocoop</option>
+              <option value="Amazon">Amazon</option>
+              <option value="Fnac">Fnac</option>
+              <option value="Darty">Darty</option>
+              <option value="Decathlon">Decathlon</option>
+              <option value="Leroy Merlin">Leroy Merlin</option>
+            </select>
+          </div>
+
+          <div class="filter-group">
+            <label for="input-debut">Date début</label>
+            <input type="date" id="input-debut" name="date-debut" />
+          </div>
+
+          <div class="filter-group">
+            <label for="input-fin">Date fin</label>
+            <input type="date" id="input-fin" name="date-fin" />
+          </div>
+
+          <div class="filter-group">
+            <label for="sel-tri">Trier par</label>
+            <select id="sel-tri" name="tri">
+              <option value="date_de_publication DESC">Date (récent)</option>
+              <option value="date_de_publication ASC">Date (ancien)</option>
+              <option value="nom_de_la_marque_du_produit ASC">Marque A→Z</option>
+              <option value="nom_de_la_marque_du_produit DESC">Marque Z→A</option>
+              <option value="categorie_de_produit ASC">Catégorie A→Z</option>
+            </select>
+          </div>
+
+          <div class="filter-group filter-group--actions">
+            <button type="submit" class="btn btn-primary" id="btn-search">🔍 Rechercher</button>
+            <button type="button" class="btn btn-secondary" id="btn-reset">✕ Réinitialiser</button>
+          </div>
+
+        </div>
+      </form>
+    </section>
+
+    <div id="status-bar" class="status-bar hidden" role="status" aria-live="polite"></div>
+
+    <div id="results-grid" class="results-grid" role="list" aria-label="Résultats de rappels">
+      <div class="loading-spinner" id="loading-spinner" aria-label="Chargement…">
+        <div class="spinner"></div>
+        <span>Chargement des rappels…</span>
+      </div>
+    </div>
+
+    <nav id="pagination" class="pagination" aria-label="Pagination"></nav>
+
+  </main>
+
+  <!-- PANEL ANALYSE -->
+  <main id="panel-analytics" class="panel hidden" role="tabpanel" aria-labelledby="tab-analytics">
+
+    <div id="analytics-filter-context" class="analytics-filter-context analytics-filter-context--none">
+      <span class="analytics-filter-label">Filtres actifs :</span>
+      <span id="analytics-filter-tags" class="analytics-filter-tags">Aucun filtre — analyse globale</span>
+    </div>
+
+    <div class="analytics-loading" id="analytics-loading" aria-label="Chargement de l'analyse…">
+      <div class="spinner"></div>
+      <span>Analyse en cours…</span>
+    </div>
+
+    <div class="kpi-row" id="kpi-row">
+      <div class="kpi-card" id="kpi-total">
+        <div class="kpi-value" id="kpi-total-val">—</div>
+        <div class="kpi-label">Rappels totaux</div>
+      </div>
+      <div class="kpi-card kpi-danger" id="kpi-danger">
+        <div class="kpi-value" id="kpi-danger-val">—</div>
+        <div class="kpi-label">Risques graves</div>
+      </div>
+      <div class="kpi-card kpi-warn" id="kpi-recent">
+        <div class="kpi-value" id="kpi-recent-val">—</div>
+        <div class="kpi-label">30 derniers jours</div>
+      </div>
+      <div class="kpi-card kpi-blue" id="kpi-imposed">
+        <div class="kpi-value" id="kpi-imposed-val">—</div>
+        <div class="kpi-label">Rappels imposés</div>
+      </div>
+    </div>
+
+    <div class="charts-row" id="charts-row">
+
+      <div class="chart-card">
+        <h3 class="chart-title">Rappels par catégorie</h3>
+        <div class="chart-area" id="chart-categories"></div>
+      </div>
+
+      <div class="chart-card">
+        <h3 class="chart-title">Niveau de risque</h3>
+        <div class="chart-area" id="chart-risks"></div>
+      </div>
+
+      <div class="chart-card chart-card--wide">
+        <h3 class="chart-title">Évolution mensuelle (24 mois)</h3>
+        <div class="chart-area" id="chart-timeline"></div>
+      </div>
+
+      <div class="chart-card">
+        <h3 class="chart-title">Sous-catégories</h3>
+        <div class="chart-area" id="chart-subcategories"></div>
+      </div>
+
+      <div class="chart-card">
+        <h3 class="chart-title">Nature du risque</h3>
+        <div class="chart-area" id="chart-nature"></div>
+      </div>
+
+      <div class="chart-card chart-card--wide">
+        <h3 class="chart-title">Carte de France — rappels par région</h3>
+        <div class="chart-area" id="chart-map"></div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- PANEL ALERTES -->
+  <main id="panel-alerts" class="panel hidden" role="tabpanel" aria-labelledby="tab-alerts">
+
+    <div class="alerts-layout">
+
+      <div class="alerts-form-card">
+        <h2 class="alerts-section-title">Créer / modifier une alerte</h2>
+        <p class="alerts-desc">Recevez un email dès qu'un nouveau rappel correspond à vos critères.</p>
+
+        <form id="alert-form" autocomplete="off" novalidate aria-label="Formulaire d'alerte">
+          <input type="hidden" id="alert-id" name="id" value="" />
+          <div class="alert-form-grid">
+
+            <div class="alert-field">
+              <label for="alert-email">Email <span class="required">*</span></label>
+              <input type="email" id="alert-email" name="email" placeholder="vous@exemple.fr" required />
+              <span class="field-error" id="err-email"></span>
+            </div>
+
+            <div class="alert-field">
+              <label for="alert-name">Nom de l'alerte <span class="required">*</span></label>
+              <input type="text" id="alert-name" name="name" placeholder="Mon alerte alimentation" required />
+              <span class="field-error" id="err-name"></span>
+            </div>
+
+            <div class="alert-field">
+              <label for="alert-zone">Zone géographique</label>
+              <select id="alert-zone" name="zone">
+                <option value="">France entière</option>
+                <option value="Île-de-France">Île-de-France</option>
+                <option value="Auvergne-Rhône-Alpes">Auvergne-Rhône-Alpes</option>
+                <option value="Hauts-de-France">Hauts-de-France</option>
+                <option value="Nouvelle-Aquitaine">Nouvelle-Aquitaine</option>
+                <option value="Occitanie">Occitanie</option>
+                <option value="Grand Est">Grand Est</option>
+                <option value="Provence-Alpes-Côte d'Azur">Provence-Alpes-Côte d'Azur</option>
+                <option value="Pays de la Loire">Pays de la Loire</option>
+                <option value="Normandie">Normandie</option>
+                <option value="Bretagne">Bretagne</option>
+                <option value="Bourgogne-Franche-Comté">Bourgogne-Franche-Comté</option>
+                <option value="Centre-Val de Loire">Centre-Val de Loire</option>
+                <option value="Corse">Corse</option>
+              </select>
+            </div>
+
+            <div class="alert-field">
+              <label for="alert-distributeur">Distributeur</label>
+              <select id="alert-distributeur" name="distributeur">
+                <option value="">Tous distributeurs</option>
+                <option value="Carrefour">Carrefour</option>
+                <option value="Leclerc">Leclerc</option>
+                <option value="Intermarché">Intermarché</option>
+                <option value="Lidl">Lidl</option>
+                <option value="Aldi">Aldi</option>
+                <option value="Auchan">Auchan</option>
+                <option value="Monoprix">Monoprix</option>
+                <option value="Système U">Système U</option>
+              </select>
+            </div>
+
+            <div class="alert-field">
+              <label for="alert-categorie">Catégorie</label>
+              <select id="alert-categorie" name="categorie">
+                <option value="">Toutes catégories</option>
+                <option value="Alimentation">Alimentation</option>
+                <option value="Véhicules et accessoires">Véhicules et accessoires</option>
+                <option value="Électroménager">Électroménager</option>
+                <option value="Jouets et jeux">Jouets et jeux</option>
+                <option value="Cosmétiques et hygiène">Cosmétiques et hygiène</option>
+                <option value="Santé et médical">Santé et médical</option>
+                <option value="Animaux">Animaux</option>
+              </select>
+            </div>
+
+            <div class="alert-field alert-field--full">
+              <label for="alert-keywords">Mots-clés (séparés par des virgules)</label>
+              <input type="text" id="alert-keywords" name="keywords" placeholder="gluten, noix, bactérie…" />
+              <span class="field-hint">Filtrage sur la marque, le produit et le motif du rappel</span>
+            </div>
+
+            <div class="alert-field alert-field--full">
+              <label>Fréquence d'envoi</label>
+              <div class="freq-group" role="radiogroup" aria-label="Fréquence">
+                <label class="freq-option">
+                  <input type="radio" name="freq" value="daily" /> 
+                  <span class="freq-card">📅 Quotidien</span>
+                </label>
+                <label class="freq-option">
+                  <input type="radio" name="freq" value="weekly" checked />
+                  <span class="freq-card">📆 Hebdomadaire</span>
+                </label>
+                <label class="freq-option">
+                  <input type="radio" name="freq" value="monthly" />
+                  <span class="freq-card">🗓️ Mensuel</span>
+                </label>
+              </div>
+            </div>
+
+          </div>
+
+          <div class="alert-form-actions">
+            <button type="submit" class="btn-alert-save" id="btn-alert-save">💾 Enregistrer l'alerte</button>
+            <button type="button" class="btn-alert-reset" id="btn-alert-reset">✕ Annuler</button>
+          </div>
+
+          <div id="alert-feedback" class="alert-feedback hidden" role="status" aria-live="polite"></div>
+
+        </form>
+      </div>
+
+      <div class="alerts-list-card">
+        <h2 class="alerts-section-title">
+          Mes alertes
+          <span class="alert-count-badge" id="alert-count-badge">0</span>
+        </h2>
+
+        <div id="alerts-list" class="alerts-list" aria-label="Liste des alertes">
+          <div class="empty-state">Aucune alerte configurée.</div>
+        </div>
+
+        <div id="server-status-bar" class="alert-info-box" aria-live="polite"></div>
+
+      </div>
+
+    </div>
+
+  </main>
+
+  <!-- MODAL DÉTAIL -->
+  <div id="modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div id="modal-overlay" class="modal-overlay"></div>
+    <div class="modal-box">
+      <button id="modal-close" class="modal-close" aria-label="Fermer la fiche détail">✕</button>
+      <div id="modal-content" class="modal-content"></div>
+    </div>
+  </div>
+
+  <footer class="footer">
+    <p>Données officielles — <a href="https://data.economie.gouv.fr" target="_blank" rel="noopener">data.economie.gouv.fr</a> | DGCCRF | RappelConso</p>
+    <p class="footer-muted">Application créée par IBM Bob / Arrow ECS France</p>
+  </footer>
+
+  <script src="app.js"></script>
+  <script src="analytics.js"></script>
+  <script src="alerts.js"></script>
+
+</body>
+</html>

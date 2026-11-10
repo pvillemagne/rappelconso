@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: rappelconso
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -u server.py
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: APP_USER
+        sync: false
+      - key: APP_PASS
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: 587
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: SMTP_FROM
+        sync: false
