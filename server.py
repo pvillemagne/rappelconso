@@ -85,8 +85,8 @@ def proxy_fetch_async(url):
 
 
 PRELOAD_URLS = [
-    f'{REMOTE_API}/records?limit=20&order_by=date_de_publication+DESC&timezone=Europe%2FParis',
-    f'{REMOTE_API}/facets?limit=1&facet=categorie_de_produit&timezone=Europe%2FParis',
+    f'{REMOTE_API}/records?limit=20&order_by=date_publication+DESC&timezone=Europe%2FParis',
+    f'{REMOTE_API}/facets?limit=1&facet=categorie_produit&facet=nature_juridique_rappel&timezone=Europe%2FParis',
 ]
 
 
@@ -101,7 +101,8 @@ def preload_cache():
 
 PORT    = int(sys.argv[1]) if len(sys.argv) > 1 else int(os.environ.get('PORT', 8080))
 APP_DIR = pathlib.Path(__file__).parent / 'app'
-DB_PATH = pathlib.Path(__file__).parent / 'alerts.db'
+# En production (Render), la DB est dans /tmp (éphémère) sauf si un disque persistant est monté
+DB_PATH = pathlib.Path(os.environ.get('DB_PATH', str(pathlib.Path(__file__).parent / 'alerts.db')))
 
 
 def load_env():
@@ -207,29 +208,29 @@ def fetch_rappels(alert):
     clauses = []
     if alert.get('categorie'):
         c = alert['categorie'].replace("'", "\\'")
-        clauses.append(f"categorie_de_produit = '{c}'")
+        clauses.append(f"categorie_produit = '{c}'")
     if alert.get('zone'):
         z = alert['zone'].replace("'", "\\'")
-        clauses.append(f"zone_geographique_de_vente = '{z}'")
+        clauses.append(f"zone_geographique_de_vente LIKE '%{z}%'")
     if alert.get('distributeur'):
         d = alert['distributeur'].replace("'", "\\'")
-        clauses.append(f"distributeurs_revendeurs LIKE '%{d}%'")
+        clauses.append(f"distributeurs LIKE '%{d}%'")
     if alert.get('keywords'):
         for kw in alert['keywords'].split(','):
             kw = kw.strip().replace("'", "\\'")
             if kw:
                 clauses.append(
-                    f"(libelle_produit_type LIKE '%{kw}%' OR motif_du_rappel LIKE '%{kw}%' OR nom_de_la_marque_du_produit LIKE '%{kw}%')"
+                    f"(libelle LIKE '%{kw}%' OR motif_rappel LIKE '%{kw}%' OR marque_produit LIKE '%{kw}%')"
                 )
 
     # Filtre sur les 7 derniers jours
     since = (utcnow() - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%S')
-    clauses.append(f"date_de_publication >= '{since}'")
+    clauses.append(f"date_publication >= '{since}'")
 
     where_str = ' AND '.join(clauses)
     params = urllib.parse.urlencode({
         'limit':    '50',
-        'order_by': 'date_de_publication DESC',
+        'order_by': 'date_publication DESC',
         'timezone': 'Europe/Paris',
         'where':    where_str
     })
@@ -290,18 +291,20 @@ def scheduler_loop():
 def build_email_html(alert, rappels):
     rows = ''
     for r in rappels[:30]:
-        brand   = r.get('nom_de_la_marque_du_produit', '—')
-        product = r.get('libelle_produit_type') or r.get('noms_des_modeles_ou_references', '—')
-        motif   = r.get('motif_du_rappel', '—')
-        date    = (r.get('date_de_publication') or '')[:10]
-        cat     = r.get('categorie_de_produit', '')
+        brand   = r.get('marque_produit', '—')
+        product = r.get('libelle') or r.get('modeles_ou_references', '—')
+        motif   = r.get('motif_rappel', '—')
+        date    = (r.get('date_publication') or '')[:10]
+        cat     = r.get('categorie_produit', '')
+        fiche   = r.get('lien_vers_la_fiche_rappel', '')
+        product_cell = f'<a href="{esc(fiche)}" style="color:#2563eb;text-decoration:none">{esc(product)}</a>' if fiche else esc(product)
         rows += f'''
         <tr>
           <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:13px">{esc(brand)}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:13px">{esc(product)}</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:13px">{product_cell}</td>
           <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:12px;color:#57606a">{esc(cat)}</td>
           <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:12px;color:#57606a;white-space:nowrap">{esc(date)}</td>
-          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:12px;color:#57606a">{esc((motif or '')[:100])}…</td>
+          <td style="padding:8px 10px;border-bottom:1px solid #eee;font-size:12px;color:#57606a">{esc((motif or '')[:120])}</td>
         </tr>'''
 
     filters_html = ''
@@ -467,16 +470,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         # /api/proxy
         if path == '/api/proxy':
-            qs     = urllib.parse.parse_qs(parsed.query)
+            qs     = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
             p_path = qs.get('_path', ['/records'])[0]
-            # Reconstituer les params sans _path
-            params = {k: v[0] for k, v in qs.items() if k != '_path'}
+            # Reconstituer les params sans _path — conserver les params multi-valeurs (ex: facet=X&facet=Y)
+            pairs = [(k, vi) for k, vs in qs.items() if k != '_path' for vi in vs]
             # Détection facets
-            if p_path == '/facets' or 'facet' in params:
+            has_facet = any(k == 'facet' for k, _ in pairs)
+            if p_path == '/facets' or has_facet:
                 endpoint = '/facets'
             else:
                 endpoint = '/records'
-            remote_url = f'{REMOTE_API}{endpoint}?{urllib.parse.urlencode(params)}'
+            remote_url = f'{REMOTE_API}{endpoint}?{urllib.parse.urlencode(pairs)}'
 
             data, from_cache = proxy_fetch_async(remote_url)
             if data is None:
@@ -609,8 +613,9 @@ def main():
     print(f'   SMTP             : {SMTP_HOST or "(non configuré)"}')
     print(f'\n   → Ouvrir dans le navigateur : {url}\n')
 
-    # Ouvre le navigateur après 1.5s
-    threading.Timer(1.5, lambda: webbrowser.open(url)).start()
+    # Ouvre le navigateur uniquement en local (pas sur un serveur sans écran)
+    if os.environ.get('RENDER') != 'true' and sys.stdout.isatty():
+        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
     socketserver.TCPServer.allow_reuse_address = True
     with socketserver.ThreadingTCPServer(('', PORT), Handler) as httpd:

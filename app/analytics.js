@@ -44,12 +44,17 @@
 
   // ---- API FETCH (proxy ou direct) ----
   async function apiFetch(path, params = {}) {
+    // Construire l'URL avec URLSearchParams pour gérer les params répétés (facet)
     let url;
+    const p = new URLSearchParams();
+    Object.entries(params).forEach(([k, v]) => {
+      if (Array.isArray(v)) v.forEach(vi => p.append(k, vi));
+      else p.append(k, v);
+    });
     if (_useProxy) {
-      const p = new URLSearchParams({ ...params, _path: path });
+      p.append('_path', path);
       url = `/api/proxy?${p.toString()}`;
     } else {
-      const p = new URLSearchParams(params);
       url = `${API_REMOTE}${path}?${p.toString()}`;
     }
 
@@ -62,8 +67,9 @@
   }
 
   // ---- API FACETS ----
+  // L'API n'accepte pas facet=X,Y — il faut répéter le paramètre : facet=X&facet=Y
   async function apiFacets(baseWhere, ...facetNames) {
-    const params = { limit: '1', facet: facetNames.join(','), timezone: 'Europe/Paris' };
+    const params = { limit: '1', facet: facetNames, timezone: 'Europe/Paris' };
     if (baseWhere) params.where = baseWhere;
     return apiFetch('/facets', params);
   }
@@ -80,24 +86,70 @@
       : (data.total_count || 0);
   }
 
-  // ---- MONTHLY TIMELINE (24 mois) ----
+  // ---- MONTHLY TIMELINE (12 derniers mois) ----
+  // group_by et order_by doivent utiliser les expressions complètes (pas les alias)
   async function apiMonthlyTimeline(baseWhere) {
+    // Calculer la date il y a 12 mois
+    const since = new Date();
+    since.setMonth(since.getMonth() - 11);
+    since.setDate(1);
+    const sinceStr = since.toISOString().slice(0, 10) + 'T00:00:00';
+
+    const clauses = [`date_publication >= '${sinceStr}'`];
+    if (baseWhere) clauses.push(baseWhere);
+
     const params = {
-      limit: '24',
-      order_by: 'annee DESC, mois DESC',
-      select: 'year(date_de_publication) as annee, month(date_de_publication) as mois, count(*) as cnt',
-      group_by: 'annee, mois',
-      timezone: 'Europe/Paris'
+      limit: '12',
+      order_by: 'year(date_publication) DESC, month(date_publication) DESC',
+      select: 'year(date_publication) as annee, month(date_publication) as mois, count(*) as cnt',
+      group_by: 'year(date_publication), month(date_publication)',
+      timezone: 'Europe/Paris',
+      where: clauses.join(' AND ')
     };
-    if (baseWhere) params.where = baseWhere;
     return apiFetch('/records', params);
   }
 
   // ---- BY REGION ----
+  // Stratégie : une requête count par région + une pour "france entière"
+  // (2095 zones distinctes → impossible de tout récupérer en une requête)
   async function apiByRegion(baseWhere) {
-    const params = { limit: '50', select: 'zone_geographique_de_vente, count(*) as cnt', group_by: 'zone_geographique_de_vente', timezone: 'Europe/Paris' };
-    if (baseWhere) params.where = baseWhere;
-    return apiFetch('/records', params);
+    const regionNames = [
+      'île-de-france', 'centre-val de loire', 'bourgogne-franche-comté',
+      'normandie', 'hauts-de-france', 'grand-est', 'pays-de-la-loire',
+      'bretagne', 'nouvelle-aquitaine', 'occitanie', 'auvergne-rhône-alpes',
+      "provence-alpes-côte d'azur", 'corse',
+      'guadeloupe', 'martinique', 'guyane', 'réunion', 'reunion'
+    ];
+
+    // Construire une requête unique qui compte par région avec LIKE
+    // On utilise des requêtes SELECT CASE pour grouper les zones
+    const requests = regionNames.map(name => {
+      const escaped = name.replace(/'/g, "\\'");
+      const clauses = [
+        `zone_geographique_de_vente LIKE '%${escaped}%'`,
+        `NOT (zone_geographique_de_vente LIKE '%france entière%')`
+      ];
+      if (baseWhere) clauses.push(baseWhere);
+      return apiCount(clauses.join(' AND '), null).then(cnt => ({
+        zone_geographique_de_vente: name,
+        cnt
+      }));
+    });
+
+    // Requête séparée pour "france entière"
+    const franceWhere = [
+      `zone_geographique_de_vente = 'france entière'`,
+      baseWhere
+    ].filter(Boolean).join(' AND ');
+    requests.push(
+      apiCount(franceWhere, null).then(cnt => ({
+        zone_geographique_de_vente: 'france entière',
+        cnt
+      }))
+    );
+
+    const results = await Promise.all(requests);
+    return { results: results.filter(r => r.cnt > 0) };
   }
 
   // ---- TAB REFS ----
@@ -109,6 +161,7 @@
   const panelAlerts  = document.getElementById('panel-alerts');
 
   let lastAnalyticsWhere = '__NONE__';
+  let _analyticsToken = 0; // incrémenté à chaque loadAnalytics pour annuler les phases en retard
 
   function switchToAnalytics() {
     tabSearch.classList.remove('active');    tabSearch.setAttribute('aria-selected', 'false');
@@ -151,13 +204,13 @@
     // Build readable tags from where clause
     const tags = [];
     const patterns = [
-      { re: /categorie_de_produit = '([^']+)'/, label: cat => `Catégorie : ${cat}` },
+      { re: /categorie_produit = '([^']+)'/, label: cat => `Catégorie : ${cat}` },
       { re: /zone_geographique_de_vente = '([^']+)'/, label: z => `Zone : ${z}` },
-      { re: /distributeurs_revendeurs LIKE '%([^%']+)%'/, label: d => `Distributeur : ${d}` },
-      { re: /nom_de_la_marque_du_produit LIKE '%([^%']+)%'/, label: q => `Recherche : ${q}` },
-      { re: /libelle_produit_type LIKE '%([^%']+)%'/, label: q => `Produit : ${q}` },
-      { re: /date_de_publication >= '([^T']+)/, label: d => `Depuis : ${d}` },
-      { re: /date_de_publication <= '([^T']+)/, label: d => `Jusqu'au : ${d}` }
+      { re: /distributeurs LIKE '%([^%']+)%'/, label: d => `Distributeur : ${d}` },
+      { re: /marque_produit LIKE '%([^%']+)%'/, label: q => `Recherche : ${q}` },
+      { re: /libelle LIKE '%([^%']+)%'/, label: q => `Produit : ${q}` },
+      { re: /date_publication >= '([^T']+)/, label: d => `Depuis : ${d}` },
+      { re: /date_publication <= '([^T']+)/, label: d => `Jusqu'au : ${d}` }
     ];
 
     patterns.forEach(({ re, label }) => {
@@ -171,6 +224,7 @@
 
   // ---- LOAD ANALYTICS ----
   async function loadAnalytics(baseWhere) {
+    const token = ++_analyticsToken; // chaque appel a son propre token
     const loadingEl = document.getElementById('analytics-loading');
     loadingEl.classList.add('visible');
     resetKPIs();
@@ -180,41 +234,44 @@
     try {
       // Phase 1 : 3 requêtes parallèles
       const [facetData, totalCount, timelineData] = await Promise.all([
-        apiFacets(baseWhere, 'categorie_de_produit', 'rappel_guid', 'nature_juridique_du_rappel', 'sous_categorie_de_produit', 'risques_encourus_par_le_consommateur'),
+        apiFacets(baseWhere, 'categorie_produit', 'rappel_guid', 'nature_juridique_rappel', 'sous_categorie_produit', 'risques_encourus'),
         apiCount(baseWhere, null),
         apiMonthlyTimeline(baseWhere)
       ]);
+
+      if (token !== _analyticsToken) return; // filtre changé entre-temps
 
       loadingEl.classList.remove('visible');
 
       document.getElementById('kpi-total-val').textContent = totalCount.toLocaleString('fr-FR');
 
       // Catégories
-      const catFacet = getFacetValues(facetData, 'categorie_de_produit');
+      const catFacet = getFacetValues(facetData, 'categorie_produit');
       renderHBar('chart-categories', catFacet.slice(0, 10), '#e34b2a');
 
       // Sous-catégories
-      const subFacet = getFacetValues(facetData, 'sous_categorie_de_produit');
+      const subFacet = getFacetValues(facetData, 'sous_categorie_produit');
       renderHBar('chart-subcategories', subFacet.slice(0, 10), '#7c3aed');
 
       // Risques / nature juridique
-      const natFacet = getFacetValues(facetData, 'nature_juridique_du_rappel');
+      const natFacet = getFacetValues(facetData, 'nature_juridique_rappel');
       renderHBar('chart-risks', natFacet.slice(0, 8), '#f59e0b');
 
       // Nature du risque → donut
-      const riskFacet = getFacetValues(facetData, 'risques_encourus_par_le_consommateur');
+      const riskFacet = getFacetValues(facetData, 'risques_encourus');
       renderDonut('chart-nature', riskFacet.slice(0, 6), totalCount);
 
       // Courbe temporelle
       renderLineChart('chart-timeline', timelineData.results || []);
 
-      // Phase 2 : KPI supplémentaires en background
+      // Phase 2 : KPI + carte en background
       Promise.all([
-        apiCount(baseWhere, "risques_encourus_par_le_consommateur LIKE '%grave%' OR risques_encourus_par_le_consommateur LIKE '%mort%' OR risques_encourus_par_le_consommateur LIKE '%danger%'"),
-        apiCount(baseWhere, `date_de_publication >= '${recentDate()}'`),
-        apiCount(baseWhere, "nature_juridique_du_rappel LIKE '%imposé%' OR nature_juridique_du_rappel LIKE '%ordonnance%'"),
+        apiCount(baseWhere, "risques_encourus LIKE '%grave%' OR risques_encourus LIKE '%mort%' OR risques_encourus LIKE '%danger%'"),
+        apiCount(baseWhere, `date_publication >= '${recentDate()}'`),
+        apiCount(baseWhere, "nature_juridique_rappel LIKE '%imposé%' OR nature_juridique_rappel LIKE '%ordonnance%'"),
         apiByRegion(baseWhere)
       ]).then(([dangerCount, recentCount, imposedCount, regionData]) => {
+        if (token !== _analyticsToken) return; // filtre changé entre-temps
         document.getElementById('kpi-danger-val').textContent = dangerCount.toLocaleString('fr-FR');
         document.getElementById('kpi-recent-val').textContent = recentCount.toLocaleString('fr-FR');
         document.getElementById('kpi-imposed-val').textContent = imposedCount.toLocaleString('fr-FR');
@@ -276,13 +333,23 @@
   function renderLineChart(containerId, months) {
     const el = document.getElementById(containerId);
     if (!el) return;
-    if (!months.length) { el.innerHTML = '<span style="color:var(--muted);font-size:12px">Pas de données</span>'; return; }
 
-    // Trier chronologiquement
-    const sorted = [...months].sort((a, b) => {
-      if (a.annee !== b.annee) return a.annee - b.annee;
-      return a.mois - b.mois;
-    });
+    // Normaliser les champs (l'API retourne "year(date_publication)" comme clé, pas "annee")
+    const normalized = months.map(m => ({
+      annee: m.annee ?? m['year(date_publication)'] ?? 0,
+      mois:  m.mois  ?? m['month(date_publication)'] ?? 1,
+      cnt:   Number(m.cnt) || 0
+    }));
+
+    // Compléter avec les 12 derniers mois (mois sans données → cnt = 0)
+    const lookup = new Map(normalized.map(m => [`${m.annee}-${m.mois}`, m.cnt]));
+    const sorted = [];
+    const now = new Date();
+    for (let i = 11; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const a = d.getFullYear(), mo = d.getMonth() + 1;
+      sorted.push({ annee: a, mois: mo, cnt: lookup.get(`${a}-${mo}`) || 0 });
+    }
 
     const W = 580, H = 180, PAD = { top: 16, right: 16, bottom: 36, left: 44 };
     const inner_w = W - PAD.left - PAD.right;
@@ -313,10 +380,8 @@
       </circle>`;
     }).join('');
 
-    // X labels (every 4 or every 6)
-    const step = n <= 12 ? 2 : 4;
+    // X labels — tous les mois (12 points)
     const xLabels = sorted.map((m, i) => {
-      if (i % step !== 0 && i !== n - 1) return '';
       const lbl = `${moisNames[(m.mois || 1) - 1]} ${String(m.annee).slice(2)}`;
       return `<text x="${xPos(i)}" y="${H - 6}" text-anchor="middle" font-size="10">${escHtml(lbl)}</text>`;
     }).join('');
@@ -395,117 +460,72 @@
   }
 
   // ---- REGIONS SVG ----
-  const REGIONS_SVG = [
-    {
-      id: 'hauts-de-france',
-      name: 'Hauts-de-France',
-      lx: 390, ly: 98,
-      path: 'M370,60 L430,58 L445,78 L440,105 L415,112 L390,108 L365,95 L362,72 Z'
-    },
-    {
-      id: 'normandie',
-      name: 'Normandie',
-      lx: 247, ly: 155,
-      path: 'M200,80 L290,76 L298,100 L285,130 L255,145 L220,140 L195,118 L188,98 Z'
-    },
-    {
-      id: 'bretagne',
-      name: 'Bretagne',
-      lx: 103, ly: 207,
-      path: 'M80,165 L155,158 L165,185 L140,210 L95,225 L68,212 L70,188 Z'
-    },
-    {
-      id: 'ile-de-france',
-      name: 'Île-de-France',
-      lx: 365, ly: 172,
-      path: 'M345,155 L385,152 L392,175 L378,190 L350,188 L338,172 Z'
-    },
-    {
-      id: 'grand-est',
-      name: 'Grand Est',
-      lx: 512, ly: 175,
-      path: 'M450,105 L540,100 L558,128 L555,195 L510,210 L468,198 L448,170 L452,130 Z'
-    },
-    {
-      id: 'pays-de-la-loire',
-      name: 'Pays de la Loire',
-      lx: 208, ly: 258,
-      path: 'M155,215 L245,210 L255,248 L235,275 L195,278 L158,265 L148,242 Z'
-    },
-    {
-      id: 'centre-val-de-loire',
-      name: 'Centre-Val de Loire',
-      lx: 317, ly: 245,
-      path: 'M258,200 L360,196 L368,240 L350,270 L295,272 L258,255 Z'
-    },
-    {
-      id: 'bourgogne-franche-comte',
-      name: 'Bourgogne-Franche-Comté',
-      lx: 472, ly: 258,
-      path: 'M420,198 L520,195 L528,245 L510,285 L460,290 L425,268 L418,230 Z'
-    },
-    {
-      id: 'nouvelle-aquitaine',
-      name: 'Nouvelle-Aquitaine',
-      lx: 243, ly: 388,
-      path: 'M148,285 L300,280 L318,340 L305,420 L245,445 L175,430 L138,380 L140,325 Z'
-    },
-    {
-      id: 'auvergne-rhone-alpes',
-      name: 'Auvergne-Rhône-Alpes',
-      lx: 465, ly: 372,
-      path: 'M368,280 L480,275 L502,310 L505,390 L472,418 L415,415 L368,385 L360,330 Z'
-    },
-    {
-      id: 'occitanie',
-      name: 'Occitanie',
-      lx: 335, ly: 472,
-      path: 'M175,435 L370,425 L385,460 L360,510 L275,525 L195,510 L162,478 Z'
-    },
-    {
-      id: 'provence-alpes-cote-d-azur',
-      name: "Provence-Alpes-Côte d'Azur",
-      lx: 530, ly: 455,
-      path: 'M455,410 L548,405 L562,428 L550,470 L508,482 L468,468 L448,445 Z'
-    },
-    {
-      id: 'corse',
-      name: 'Corse',
-      lx: 548, ly: 535,
-      path: 'M548,512 L560,510 L568,530 L558,555 L546,558 L538,542 L540,520 Z'
-    }
-  ];
-
+  // Pas de données statiques — carte chargée depuis GeoJSON officiel France (geo.api.gouv.fr)
   const DOMTOM_SVG = [
-    { id: 'guadeloupe', name: 'Guadeloupe', x: 20, y: 570, w: 40, h: 20 },
-    { id: 'martinique', name: 'Martinique', x: 68, y: 570, w: 40, h: 20 },
-    { id: 'guyane',     name: 'Guyane',     x: 116, y: 570, w: 40, h: 20 },
-    { id: 'reunion',    name: 'La Réunion', x: 164, y: 570, w: 40, h: 20 }
+    { id: 'guadeloupe', name: 'Guadeloupe', x: 14,  y: 500, w: 52, h: 24 },
+    { id: 'martinique', name: 'Martinique', x: 74,  y: 500, w: 52, h: 24 },
+    { id: 'guyane',     name: 'Guyane',     x: 134, y: 500, w: 52, h: 24 },
+    { id: 'reunion',    name: 'La Réunion', x: 194, y: 500, w: 52, h: 24 }
   ];
 
+  // Map nom région API (minuscules) → code INSEE région
+  const REGION_CODE = {
+    'île-de-france': '11', 'ile-de-france': '11',
+    'centre-val de loire': '24',
+    'bourgogne-franche-comté': '27', 'bourgogne-franche-comte': '27',
+    'normandie': '28',
+    'hauts-de-france': '32',
+    'grand-est': '44',
+    'pays-de-la-loire': '52',
+    'bretagne': '53',
+    'nouvelle-aquitaine': '75',
+    'occitanie': '76',
+    'auvergne-rhône-alpes': '84', 'auvergne-rhone-alpes': '84',
+    "provence-alpes-côte d'azur": '93', "provence-alpes-cote d'azur": '93',
+    'corse': '94'
+  };
+  const CODE_NAME = {
+    '11':'Île-de-France','24':'Centre-Val de Loire','27':'Bourgogne-Franche-Comté',
+    '28':'Normandie','32':'Hauts-de-France','44':'Grand Est',
+    '52':'Pays de la Loire','53':'Bretagne','75':'Nouvelle-Aquitaine',
+    '76':'Occitanie','84':'Auvergne-Rhône-Alpes',"93":"PACA",'94':'Corse'
+  };
+  const REGIONS_SVG = []; // vide — la carte GeoJSON remplace
+
+  // Correspondance avec les valeurs réelles de l'API (minuscules)
   const REGION_API_NAMES = {
-    'hauts-de-france': ['Hauts-de-France'],
-    'normandie': ['Normandie'],
-    'bretagne': ['Bretagne'],
-    'ile-de-france': ['Île-de-France', 'Ile-de-France'],
-    'grand-est': ['Grand Est'],
-    'pays-de-la-loire': ['Pays de la Loire'],
-    'centre-val-de-loire': ['Centre-Val de Loire'],
-    'bourgogne-franche-comte': ['Bourgogne-Franche-Comté', 'Bourgogne-Franche-Comte'],
-    'nouvelle-aquitaine': ['Nouvelle-Aquitaine'],
-    'auvergne-rhone-alpes': ['Auvergne-Rhône-Alpes', 'Auvergne-Rhone-Alpes'],
-    'occitanie': ['Occitanie'],
-    'provence-alpes-cote-d-azur': ["Provence-Alpes-Côte d'Azur", "Provence-Alpes-Cote d'Azur"],
-    'corse': ['Corse']
+    'hauts-de-france':           ['hauts-de-france'],
+    'normandie':                 ['normandie'],
+    'bretagne':                  ['bretagne'],
+    'ile-de-france':             ['île-de-france', 'ile-de-france'],
+    'grand-est':                 ['grand-est'],
+    'pays-de-la-loire':          ['pays-de-la-loire'],
+    'centre-val-de-loire':       ['centre-val de loire'],
+    'bourgogne-franche-comte':   ['bourgogne-franche-comté', 'bourgogne-franche-comte'],
+    'nouvelle-aquitaine':        ['nouvelle-aquitaine'],
+    'auvergne-rhone-alpes':      ['auvergne-rhône-alpes', 'auvergne-rhone-alpes'],
+    'occitanie':                 ['occitanie'],
+    'provence-alpes-cote-d-azur':["provence-alpes-côte d'azur", "provence-alpes-cote d'azur"],
+    'corse':                     ['corse'],
+    'guadeloupe':                ['guadeloupe (971)', 'guadeloupe'],
+    'martinique':                ['martinique (972)', 'martinique'],
+    'guyane':                    ['guyane (973)', 'guyane'],
+    'reunion':                   ['reunion (974)', 'réunion', 'la réunion']
   };
 
   function buildRegionCounts(results) {
+    // Retourne { regionId → count } + clé spéciale '__france__' pour les rappels "france entière"
     const counts = {};
     results.forEach(r => {
-      const zone = r.zone_geographique_de_vente || '';
+      const zone = (r.zone_geographique_de_vente || '').toLowerCase();
       const cnt  = Number(r.cnt) || 0;
+      // Rappels valables pour toute la France → stocker séparément
+      if (zone === 'france entière' || zone === 'france entiere' || zone === '') {
+        counts['__france__'] = (counts['__france__'] || 0) + cnt;
+        return;
+      }
       for (const [regionId, aliases] of Object.entries(REGION_API_NAMES)) {
-        if (aliases.some(a => zone.toLowerCase() === a.toLowerCase())) {
+        if (aliases.some(a => zone === a || zone.includes(a))) {
           counts[regionId] = (counts[regionId] || 0) + cnt;
         }
       }
@@ -513,72 +533,160 @@
     return counts;
   }
 
-  // ---- RENDER FRANCE MAP ----
+  // ---- RENDER FRANCE MAP (paths pré-calculés depuis GeoJSON IGN simplifié) ----
+  // Généré depuis github.com/gregoiredavid/france-geojson — projection lon/lat linéaire W=500 H=460
+  const METRO_REGIONS = null; // chargé depuis regions.json au premier appel
+  let _regionsData = null;
+
   function renderFranceMap(containerId, regionCounts) {
     const el = document.getElementById(containerId);
     if (!el) return;
 
-    const maxCount = Math.max(...Object.values(regionCounts), 1);
+    if (_regionsData) {
+      _drawMap(el, _regionsData, regionCounts);
+      return;
+    }
+
+    el.innerHTML = `<div style="display:flex;align-items:center;justify-content:center;height:300px;color:var(--muted);font-size:13px">
+      <div class="spinner" style="width:20px;height:20px;border-width:2px;margin-right:8px"></div>Chargement…</div>`;
+
+    fetch('regions.json')
+      .then(r => r.json())
+      .then(data => { _regionsData = data; _drawMap(el, data, regionCounts); })
+      .catch(() => {
+        el.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:20px;text-align:center">Carte indisponible</div>';
+      });
+  }
+
+  function _drawMap(el, regions, regionCounts) {
+    const W = 520, H = 480;
+
+    // byCode = counts régionaux réels (sans france entière)
+    // byCodeDisplay = counts pour la chaleur de la carte (inclut france entière distribué)
+    const byCode = {};
+    const franceTotal = regionCounts['__france__'] || 0;
+    const francePart  = Math.round(franceTotal / 13);
+
+    Object.entries(regionCounts).forEach(([apiName, cnt]) => {
+      if (apiName === '__france__') return;
+      const code = REGION_CODE[apiName];
+      if (code) byCode[code] = (byCode[code] || 0) + cnt;
+    });
+
+    // Pour l'affichage de la chaleur, ajouter la part nationale à chaque région
+    const byCodeDisplay = {};
+    regions.forEach(r => {
+      byCodeDisplay[r.code] = (byCode[r.code] || 0) + francePart;
+    });
+
+    const maxCount = Math.max(...Object.values(byCodeDisplay), 1);
 
     function heatColor(count) {
-      if (!count) return '#f0f0f0';
-      const t = count / maxCount;
-      // Blanc → rouge (#e34b2a)
+      if (!count) return '#dde8f0';
+      const t = Math.pow(count / maxCount, 0.5);
       const r = Math.round(255 - (255 - 227) * t);
       const g = Math.round(255 - (255 - 75) * t);
       const b = Math.round(255 - (255 - 42) * t);
       return `rgb(${r},${g},${b})`;
     }
 
-    const regionPaths = REGIONS_SVG.map(reg => {
-      const count = regionCounts[reg.id] || 0;
-      const fill = heatColor(count);
-      const lbl = count > 0 ? `${reg.name}: ${count.toLocaleString('fr-FR')} rappel(s)` : reg.name;
-      return `<path class="map-region" d="${reg.path}" fill="${fill}" stroke="#fff" stroke-width="1.5" stroke-linejoin="round">
-        <title>${escHtml(lbl)}</title>
+    // Abréviations pour les noms longs
+    const ABBR = {
+      "Bourgogne-Franche-Comté":   "Bourgogne\nF.-Comté",
+      "Auvergne-Rhône-Alpes":      "Auvergne\nRhône-A.",
+      "Provence-Alpes-Côte d'Azur":"PACA",
+      "Centre-Val de Loire":       "Centre\nVal de Loire",
+      "Hauts-de-France":           "Hauts-de-\nFrance",
+      "Pays de la Loire":          "Pays de\nla Loire",
+      "Nouvelle-Aquitaine":        "Nouvelle-\nAquitaine"
+    };
+
+    // Construire les paths + labels (multilines)
+    const regionPaths = regions.map(reg => {
+      const count    = byCodeDisplay[reg.code] || 0;  // inclut part nationale
+      const realCount = byCode[reg.code] || 0;        // rappels régionaux seuls
+      const fill     = heatColor(count);
+      const tooltipVal = franceTotal > 0
+        ? `${reg.nom} : ~${count.toLocaleString('fr-FR')} rappel(s) (dont ${francePart.toLocaleString('fr-FR')} nationaux)`
+        : (realCount > 0 ? `${reg.nom} : ${realCount.toLocaleString('fr-FR')} rappel(s)` : reg.nom);
+      const tooltip  = tooltipVal;
+      const isDark   = count > maxCount * 0.4;
+      const txtFill  = isDark ? '#fff' : '#1a202c';
+      const lines    = (ABBR[reg.nom] || reg.nom).split('\n');
+      const lineH    = 10;
+      const startY   = reg.cy - ((lines.length - 1) * lineH) / 2;
+      const tspans   = lines.map((l, i) =>
+        `<tspan x="${reg.cx}" dy="${i === 0 ? 0 : lineH}">${escHtml(l)}</tspan>`
+      ).join('');
+
+      // Fond blanc semi-transparent derrière le label
+      const bgW  = Math.max(...lines.map(l => l.length)) * 5.5 + 6;
+      const bgH  = lines.length * lineH + 4;
+      const bgX  = reg.cx - bgW / 2;
+      const bgY  = startY - 8;
+      const bgEl = `<rect x="${bgX.toFixed(1)}" y="${bgY.toFixed(1)}" width="${bgW.toFixed(1)}" height="${bgH.toFixed(1)}"
+        fill="${isDark ? 'rgba(0,0,0,0.18)' : 'rgba(255,255,255,0.55)'}" rx="2" pointer-events="none"/>`;
+
+      return `<path d="${reg.d}" fill="${fill}" stroke="#fff" stroke-width="0.8" stroke-linejoin="round">
+        <title>${escHtml(tooltip)}</title>
       </path>
-      <text x="${reg.lx}" y="${reg.ly}" text-anchor="middle" font-size="9" fill="${count > maxCount * 0.5 ? '#fff' : '#555'}" pointer-events="none">${escHtml(reg.name.length > 12 ? reg.name.slice(0,12)+'…' : reg.name)}</text>`;
+      ${bgEl}
+      <text x="${reg.cx}" y="${startY}" text-anchor="middle" dominant-baseline="middle"
+        font-size="9" font-weight="700" fill="${txtFill}" pointer-events="none"
+        font-family="-apple-system,'Segoe UI',sans-serif">${tspans}</text>`;
     }).join('');
 
+    // DOM-TOM : petits rectangles en bas avec séparateur
+    const domtomY = H - 44;
     const domtomPaths = DOMTOM_SVG.map(d => {
       const count = regionCounts[d.id] || 0;
       const fill  = heatColor(count);
-      return `<rect x="${d.x}" y="${d.y}" width="${d.w}" height="${d.h}" fill="${fill}" stroke="#fff" stroke-width="1" rx="2">
-        <title>${escHtml(d.name)}: ${count.toLocaleString('fr-FR')}</title>
+      return `<rect x="${d.x}" y="${domtomY}" width="${d.w}" height="22" fill="${fill}"
+        stroke="#fff" stroke-width="0.7" rx="3">
+        <title>${escHtml(d.name)} : ${count.toLocaleString('fr-FR')}</title>
       </rect>
-      <text x="${d.x + d.w/2}" y="${d.y + d.h/2 + 4}" text-anchor="middle" font-size="8" fill="#555" pointer-events="none">${escHtml(d.name.slice(0,8))}</text>`;
+      <text x="${d.x + d.w/2}" y="${domtomY + 11}" text-anchor="middle" dominant-baseline="middle"
+        font-size="7.5" font-weight="600" fill="#1a202c" pointer-events="none">${escHtml(d.name.split(' ')[0])}</text>`;
     }).join('');
 
-    // Classement régions
-    const sorted = REGIONS_SVG
-      .map(reg => ({ name: reg.name, count: regionCounts[reg.id] || 0 }))
+    // Classement — basé sur byCodeDisplay (inclut part nationale) pour avoir toutes les régions
+    const ranking = [...regions]
+      .map(r => ({ nom: r.nom, count: byCodeDisplay[r.code] || 0 }))
       .filter(x => x.count > 0)
       .sort((a, b) => b.count - a.count);
 
-    const rankingRows = sorted.slice(0, 8).map((r, i) =>
-      `<div class="map-ranking-row">
-        <span class="map-rank-num">${i+1}.</span>
-        <span class="map-rank-name">${escHtml(r.name)}</span>
+    const rankRows = ranking.slice(0, 10).map((r, i) => {
+      const pct = Math.round((r.count / ranking[0].count) * 100);
+      return `<div class="map-ranking-row">
+        <span class="map-rank-num">${i+1}</span>
+        <span class="map-rank-name">${escHtml(r.nom)}</span>
+        <span class="map-rank-bar" style="width:${pct}%"></span>
         <span class="map-rank-val">${r.count.toLocaleString('fr-FR')}</span>
-      </div>`
-    ).join('');
+      </div>`;
+    }).join('');
 
     el.innerHTML = `
       <div class="map-wrap">
-        <svg class="map-svg" viewBox="0 0 620 600" xmlns="http://www.w3.org/2000/svg">
+        <svg class="map-svg" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+          <rect width="${W}" height="${H}" fill="#c8daea" rx="8"/>
           ${regionPaths}
-          <text x="12" y="565" font-size="8" fill="#999">DOM-TOM</text>
+          <line x1="10" y1="${domtomY - 7}" x2="${W - 10}" y2="${domtomY - 7}"
+            stroke="#9ab8ce" stroke-width="0.8" stroke-dasharray="3,3"/>
+          <text x="12" y="${domtomY - 1}" font-size="8" fill="#5a7a90"
+            font-style="italic" font-family="-apple-system,'Segoe UI',sans-serif">DOM-TOM</text>
           ${domtomPaths}
         </svg>
-        <div>
+        <div class="map-side">
           <div class="map-legend">
-            <div>Rappels par région</div>
-            <div class="map-legend-gradient" style="background:linear-gradient(to right,#f0f0f0,#e34b2a)"></div>
-            <div style="display:flex;justify-content:space-between">
+            <div style="font-size:11px;font-weight:700;margin-bottom:6px;color:var(--text)">Rappels par région</div>
+            <div style="background:linear-gradient(to right,#dde8f0,#e34b2a);height:8px;border-radius:4px;border:1px solid #ddd"></div>
+            <div style="display:flex;justify-content:space-between;font-size:10px;margin-top:3px;color:var(--muted)">
               <span>0</span><span>${maxCount.toLocaleString('fr-FR')}</span>
             </div>
           </div>
-          ${sorted.length ? `<div class="map-ranking">${rankingRows}</div>` : ''}
+          ${ranking.length
+            ? `<div class="map-ranking">${rankRows}</div>`
+            : '<p style="font-size:11px;color:var(--muted);margin-top:8px">Aucune donnée régionale disponible</p>'}
         </div>
       </div>`;
   }

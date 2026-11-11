@@ -1,3 +1,1 @@
-# Pas de dépendances externes — stdlib Python uniquement
-# certifi est optionnel pour les certificats SSL
 certifi>=2024.0.0

@@ -10,28 +10,15 @@
 </head>
 <body>
 
-  <!-- TOPBAR -->
-  <div class="topbar">
-    <img src="logo-arrow.png" alt="Arrow ECS" class="topbar-logo topbar-logo--arrow" />
-    <span class="topbar-center">Créé par IBM Bob / Arrow ECS France</span>
-    <img src="logo-ibmbob.png" alt="IBM Bob" class="topbar-logo topbar-logo--ibm" />
-  </div>
-
   <!-- HEADER -->
   <header class="header">
     <div class="header-inner">
-      <div class="header-brand">
-        <svg class="header-brand-logo" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <circle cx="30" cy="30" r="28" fill="#e34b2a"/>
-          <rect x="27" y="14" width="6" height="22" rx="3" fill="#fff"/>
-          <circle cx="30" cy="44" r="4" fill="#fff"/>
-        </svg>
-      </div>
+      <img src="logo-arrow.png" alt="Arrow ECS France" class="header-logo header-logo--arrow" />
       <div class="header-center">
         <h1 class="header-title">RappelConso</h1>
         <p class="header-subtitle">Surveillance des rappels produits en France — données officielles DGCCRF</p>
       </div>
-      <div class="header-brand header-brand--right"></div>
+      <img src="logo-ibmbob.png" alt="IBM Bob" class="header-logo header-logo--ibm" />
     </div>
   </header>
 
@@ -64,18 +51,16 @@
             <label for="sel-categorie">Catégorie</label>
             <select id="sel-categorie" name="categorie">
               <option value="">Toutes catégories</option>
-              <option value="Alimentation">Alimentation</option>
-              <option value="Véhicules et accessoires">Véhicules et accessoires</option>
-              <option value="Électroménager">Électroménager</option>
-              <option value="Jouets et jeux">Jouets et jeux</option>
-              <option value="Cosmétiques et hygiène">Cosmétiques et hygiène</option>
-              <option value="Équipements électriques">Équipements électriques</option>
-              <option value="Textiles et habillement">Textiles et habillement</option>
-              <option value="Matériaux et bricolage">Matériaux et bricolage</option>
-              <option value="Santé et médical">Santé et médical</option>
-              <option value="Animaux">Animaux</option>
-              <option value="Plantes et jardinage">Plantes et jardinage</option>
-              <option value="Sport et loisirs">Sport et loisirs</option>
+              <option value="alimentation">Alimentation</option>
+              <option value="automobiles et moyens de déplacement">Automobiles et déplacement</option>
+              <option value="bébés-enfants (hors alimentaire)">Bébés-Enfants</option>
+              <option value="maison-habitat">Maison-Habitat</option>
+              <option value="appareils électriques, outils">Appareils électriques, outils</option>
+              <option value="hygiène-beauté">Hygiène-Beauté</option>
+              <option value="vêtements, mode, epi">Vêtements, Mode, EPI</option>
+              <option value="sports-loisirs">Sports-Loisirs</option>
+              <option value="equipements de communication">Équipements de communication</option>
+              <option value="autres">Autres</option>
             </select>
           </div>
 
@@ -83,33 +68,27 @@
             <label for="sel-zone">Zone géographique</label>
             <select id="sel-zone" name="zone">
               <option value="">France entière</option>
+              <option value="france entière">France entière (explicite)</option>
               <optgroup label="Régions métropolitaines">
-                <option value="Île-de-France">Île-de-France</option>
-                <option value="Auvergne-Rhône-Alpes">Auvergne-Rhône-Alpes</option>
-                <option value="Hauts-de-France">Hauts-de-France</option>
-                <option value="Nouvelle-Aquitaine">Nouvelle-Aquitaine</option>
-                <option value="Occitanie">Occitanie</option>
-                <option value="Grand Est">Grand Est</option>
-                <option value="Provence-Alpes-Côte d'Azur">Provence-Alpes-Côte d'Azur</option>
-                <option value="Pays de la Loire">Pays de la Loire</option>
-                <option value="Normandie">Normandie</option>
-                <option value="Bretagne">Bretagne</option>
-                <option value="Bourgogne-Franche-Comté">Bourgogne-Franche-Comté</option>
-                <option value="Centre-Val de Loire">Centre-Val de Loire</option>
-                <option value="Corse">Corse</option>
+                <option value="île-de-france">Île-de-France</option>
+                <option value="auvergne-rhône-alpes">Auvergne-Rhône-Alpes</option>
+                <option value="hauts-de-france">Hauts-de-France</option>
+                <option value="nouvelle-aquitaine">Nouvelle-Aquitaine</option>
+                <option value="occitanie">Occitanie</option>
+                <option value="grand-est">Grand Est</option>
+                <option value="provence-alpes-côte d'azur">Provence-Alpes-Côte d'Azur</option>
+                <option value="pays-de-la-loire">Pays de la Loire</option>
+                <option value="normandie">Normandie</option>
+                <option value="bretagne">Bretagne</option>
+                <option value="bourgogne-franche-comté">Bourgogne-Franche-Comté</option>
+                <option value="centre-val de loire">Centre-Val de Loire</option>
+                <option value="corse">Corse</option>
               </optgroup>
               <optgroup label="DOM-TOM">
-                <option value="Guadeloupe">Guadeloupe</option>
-                <option value="Martinique">Martinique</option>
-                <option value="Guyane">Guyane</option>
-                <option value="La Réunion">La Réunion</option>
-                <option value="Mayotte">Mayotte</option>
-                <option value="Saint-Pierre-et-Miquelon">Saint-Pierre-et-Miquelon</option>
-                <option value="Saint-Barthélemy">Saint-Barthélemy</option>
-                <option value="Saint-Martin">Saint-Martin</option>
-                <option value="Polynésie française">Polynésie française</option>
-                <option value="Nouvelle-Calédonie">Nouvelle-Calédonie</option>
-                <option value="Wallis-et-Futuna">Wallis-et-Futuna</option>
+                <option value="guadeloupe (971)">Guadeloupe</option>
+                <option value="martinique (972)">Martinique</option>
+                <option value="guyane (973)">Guyane</option>
+                <option value="reunion (974)">La Réunion</option>
               </optgroup>
             </select>
           </div>
@@ -151,11 +130,11 @@
           <div class="filter-group">
             <label for="sel-tri">Trier par</label>
             <select id="sel-tri" name="tri">
-              <option value="date_de_publication DESC">Date (récent)</option>
-              <option value="date_de_publication ASC">Date (ancien)</option>
-              <option value="nom_de_la_marque_du_produit ASC">Marque A→Z</option>
-              <option value="nom_de_la_marque_du_produit DESC">Marque Z→A</option>
-              <option value="categorie_de_produit ASC">Catégorie A→Z</option>
+              <option value="date_publication DESC">Date (récent)</option>
+              <option value="date_publication ASC">Date (ancien)</option>
+              <option value="marque_produit ASC">Marque A→Z</option>
+              <option value="marque_produit DESC">Marque Z→A</option>
+              <option value="categorie_produit ASC">Catégorie A→Z</option>
             </select>
           </div>
 
@@ -226,7 +205,7 @@
       </div>
 
       <div class="chart-card chart-card--wide">
-        <h3 class="chart-title">Évolution mensuelle (24 mois)</h3>
+        <h3 class="chart-title">Évolution mensuelle (12 derniers mois)</h3>
         <div class="chart-area" id="chart-timeline"></div>
       </div>
 
@@ -278,19 +257,24 @@
               <label for="alert-zone">Zone géographique</label>
               <select id="alert-zone" name="zone">
                 <option value="">France entière</option>
-                <option value="Île-de-France">Île-de-France</option>
-                <option value="Auvergne-Rhône-Alpes">Auvergne-Rhône-Alpes</option>
-                <option value="Hauts-de-France">Hauts-de-France</option>
-                <option value="Nouvelle-Aquitaine">Nouvelle-Aquitaine</option>
-                <option value="Occitanie">Occitanie</option>
-                <option value="Grand Est">Grand Est</option>
-                <option value="Provence-Alpes-Côte d'Azur">Provence-Alpes-Côte d'Azur</option>
-                <option value="Pays de la Loire">Pays de la Loire</option>
-                <option value="Normandie">Normandie</option>
-                <option value="Bretagne">Bretagne</option>
-                <option value="Bourgogne-Franche-Comté">Bourgogne-Franche-Comté</option>
-                <option value="Centre-Val de Loire">Centre-Val de Loire</option>
-                <option value="Corse">Corse</option>
+                <option value="france entière">France entière (explicite)</option>
+                <option value="île-de-france">Île-de-France</option>
+                <option value="auvergne-rhône-alpes">Auvergne-Rhône-Alpes</option>
+                <option value="hauts-de-france">Hauts-de-France</option>
+                <option value="nouvelle-aquitaine">Nouvelle-Aquitaine</option>
+                <option value="occitanie">Occitanie</option>
+                <option value="grand-est">Grand Est</option>
+                <option value="provence-alpes-côte d'azur">Provence-Alpes-Côte d'Azur</option>
+                <option value="pays-de-la-loire">Pays de la Loire</option>
+                <option value="normandie">Normandie</option>
+                <option value="bretagne">Bretagne</option>
+                <option value="bourgogne-franche-comté">Bourgogne-Franche-Comté</option>
+                <option value="centre-val de loire">Centre-Val de Loire</option>
+                <option value="corse">Corse</option>
+                <option value="guadeloupe (971)">Guadeloupe</option>
+                <option value="martinique (972)">Martinique</option>
+                <option value="guyane (973)">Guyane</option>
+                <option value="reunion (974)">La Réunion</option>
               </select>
             </div>
 
@@ -313,13 +297,15 @@
               <label for="alert-categorie">Catégorie</label>
               <select id="alert-categorie" name="categorie">
                 <option value="">Toutes catégories</option>
-                <option value="Alimentation">Alimentation</option>
-                <option value="Véhicules et accessoires">Véhicules et accessoires</option>
-                <option value="Électroménager">Électroménager</option>
-                <option value="Jouets et jeux">Jouets et jeux</option>
-                <option value="Cosmétiques et hygiène">Cosmétiques et hygiène</option>
-                <option value="Santé et médical">Santé et médical</option>
-                <option value="Animaux">Animaux</option>
+                <option value="alimentation">Alimentation</option>
+                <option value="automobiles et moyens de déplacement">Automobiles et déplacement</option>
+                <option value="bébés-enfants (hors alimentaire)">Bébés-Enfants</option>
+                <option value="maison-habitat">Maison-Habitat</option>
+                <option value="appareils électriques, outils">Appareils électriques, outils</option>
+                <option value="hygiène-beauté">Hygiène-Beauté</option>
+                <option value="vêtements, mode, epi">Vêtements, Mode, EPI</option>
+                <option value="sports-loisirs">Sports-Loisirs</option>
+                <option value="autres">Autres</option>
               </select>
             </div>
 

@@ -1,9 +1,9 @@
 services:
   - type: web
     name: rappelconso
-    env: python
+    runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python -u server.py
+    startCommand: python -u server.py $PORT
     envVars:
       - key: PORT
         value: 10000

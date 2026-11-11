@@ -15,7 +15,7 @@
     distributeur: '',
     dateDebut: '',
     dateFin: '',
-    orderBy: 'date_de_publication DESC',
+    orderBy: 'date_publication DESC',
     page: 0,
     total: 0
   };
@@ -46,31 +46,31 @@
     if (state.query) {
       const q = state.query.replace(/'/g, "\\'");
       clauses.push(
-        `(libelle_produit_type LIKE '%${q}%' OR nom_de_la_marque_du_produit LIKE '%${q}%' OR modeles_ou_references LIKE '%${q}%' OR motif_du_rappel LIKE '%${q}%')`
+        `(libelle LIKE '%${q}%' OR marque_produit LIKE '%${q}%' OR modeles_ou_references LIKE '%${q}%' OR motif_rappel LIKE '%${q}%')`
       );
     }
 
     if (state.categorie) {
       const c = state.categorie.replace(/'/g, "\\'");
-      clauses.push(`categorie_de_produit = '${c}'`);
+      clauses.push(`categorie_produit = '${c}'`);
     }
 
     if (state.zone) {
       const z = state.zone.replace(/'/g, "\\'");
-      clauses.push(`zone_geographique_de_vente = '${z}'`);
+      clauses.push(`zone_geographique_de_vente LIKE '%${z}%'`);
     }
 
     if (state.distributeur) {
       const d = state.distributeur.replace(/'/g, "\\'");
-      clauses.push(`distributeurs_revendeurs LIKE '%${d}%'`);
+      clauses.push(`distributeurs LIKE '%${d}%'`);
     }
 
     if (state.dateDebut) {
-      clauses.push(`date_de_publication >= '${state.dateDebut}T00:00:00'`);
+      clauses.push(`date_publication >= '${state.dateDebut}T00:00:00'`);
     }
 
     if (state.dateFin) {
-      clauses.push(`date_de_publication <= '${state.dateFin}T23:59:59'`);
+      clauses.push(`date_publication <= '${state.dateFin}T23:59:59'`);
     }
 
     return clauses.join(' AND ');
@@ -128,11 +128,11 @@
 
   // ---- CARD HTML ----
   function cardHTML(r) {
-    const brand    = r.nom_de_la_marque_du_produit || 'Marque inconnue';
-    const title    = r.libelle_produit_type || r.noms_des_modeles_ou_references || 'Produit sans nom';
-    const cat      = r.categorie_de_produit || '';
-    const motif    = r.motif_du_rappel || '';
-    const dateRaw  = r.date_de_publication || '';
+    const brand    = r.marque_produit || 'Marque inconnue';
+    const title    = r.libelle || r.modeles_ou_references || 'Produit sans nom';
+    const cat      = r.categorie_produit || '';
+    const motif    = r.motif_rappel || '';
+    const dateRaw  = r.date_publication || '';
     const date     = dateRaw ? new Date(dateRaw).toLocaleDateString('fr-FR') : '';
     const imgUrl   = r.liens_vers_les_images && r.liens_vers_les_images.trim()
                      ? r.liens_vers_les_images.split(/[\n,;]+/)[0].trim()
@@ -143,7 +143,7 @@
       : `<div class="card-image--placeholder">📦</div>`;
 
     return `
-      <article class="card" tabindex="0" role="listitem" data-guid="${escAttr(r.guid_rappel || '')}">
+      <article class="card" tabindex="0" role="listitem" data-guid="${escAttr(r.rappel_guid || '')}">
         ${imgHtml}
         <div class="card-header">
           <span class="card-brand">${escHtml(brand)}</span>
@@ -244,7 +244,7 @@
 
   // ---- OPEN MODAL ----
   function openModal(guid) {
-    const r = _lastRecords.find(x => x.guid_rappel === guid);
+    const r = _lastRecords.find(x => x.rappel_guid === guid);
     if (!r) return;
     modalContent.innerHTML = buildModalHTML(r);
     modal.classList.add('open');
@@ -258,16 +258,16 @@
   }
 
   function buildModalHTML(r) {
-    const brand    = r.nom_de_la_marque_du_produit || 'Marque inconnue';
-    const title    = r.libelle_produit_type || r.noms_des_modeles_ou_references || 'Produit sans nom';
-    const cat      = r.categorie_de_produit || '';
-    const motif    = r.motif_du_rappel || '';
-    const risques  = r.risques_encourus_par_le_consommateur || '';
+    const brand    = r.marque_produit || 'Marque inconnue';
+    const title    = r.libelle || r.modeles_ou_references || 'Produit sans nom';
+    const cat      = r.categorie_produit || '';
+    const motif    = r.motif_rappel || '';
+    const risques  = r.risques_encourus || '';
     const conduite = r.conduite_a_tenir_par_le_consommateur || '';
-    const distrib  = r.distributeurs_revendeurs || '';
-    const dateRaw  = r.date_de_publication || '';
+    const distrib  = r.distributeurs || '';
+    const dateRaw  = r.date_publication || '';
     const date     = dateRaw ? new Date(dateRaw).toLocaleDateString('fr-FR', { year:'numeric', month:'long', day:'numeric' }) : '';
-    const refs     = r.modeles_ou_references || r.noms_des_modeles_ou_references || '';
+    const refs     = r.modeles_ou_references || '';
     const gtins    = r.gtins || r.gtin || '';
     const imgUrl   = r.liens_vers_les_images && r.liens_vers_les_images.trim()
                      ? r.liens_vers_les_images.split(/[\n,;]+/)[0].trim()
@@ -339,7 +339,7 @@
 
   btnReset.addEventListener('click', () => {
     form.reset();
-    Object.assign(state, { query:'', categorie:'', zone:'', distributeur:'', dateDebut:'', dateFin:'', orderBy:'date_de_publication DESC', page:0, total:0 });
+    Object.assign(state, { query:'', categorie:'', zone:'', distributeur:'', dateDebut:'', dateFin:'', orderBy:'date_publication DESC', page:0, total:0 });
     search();
   });
 
