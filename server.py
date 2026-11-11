@@ -164,16 +164,20 @@ def init_db():
 
 
 def db_upsert(alert):
+    # Normaliser next_send / nextSend et created_at / createdAt (front envoie camelCase)
+    d = dict(alert)
+    d.setdefault('next_send', d.pop('nextSend', None))
+    d.setdefault('created_at', d.pop('createdAt', None))
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute('''
             INSERT INTO alerts (id, email, name, zone, distributeur, categorie, keywords, freq, next_send, created_at)
-            VALUES (:id, :email, :name, :zone, :distributeur, :categorie, :keywords, :freq, :nextSend, :createdAt)
+            VALUES (:id, :email, :name, :zone, :distributeur, :categorie, :keywords, :freq, :next_send, :created_at)
             ON CONFLICT(id) DO UPDATE SET
                 email=excluded.email, name=excluded.name,
                 zone=excluded.zone, distributeur=excluded.distributeur,
                 categorie=excluded.categorie, keywords=excluded.keywords,
                 freq=excluded.freq, next_send=excluded.next_send
-        ''', alert)
+        ''', d)
         conn.commit()
 
 
@@ -433,6 +437,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def error_response(self, msg, status=400):
         self.json_response({'error': msg}, status)
 
+    def _serve_index(self):
+        """Sert index.html en injectant window._appCreds pour les appels API authentifiés."""
+        index_path = APP_DIR / 'index.html'
+        try:
+            html = index_path.read_text(encoding='utf-8')
+        except OSError:
+            self.error_response('index.html introuvable', 404)
+            return
+        inject = f'<script>window._appCreds="{APP_USER}:{APP_PASS}";</script>'
+        html = html.replace('</head>', inject + '\n</head>', 1)
+        body = html.encode('utf-8')
+        self.send_response(200)
+        self._cors_headers()
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     # ── GET ───────────────────────────────────
 
     def do_GET(self):
@@ -444,7 +466,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not self._check_auth():
                 self._require_auth()
                 return
-            # Servir le fichier statique
+            # Pour index.html : injecter window._appCreds pour que le JS puisse appeler /api/*
+            if path in ('/', '/index.html', ''):
+                self._serve_index()
+                return
             super().do_GET()
             return
 

@@ -245,21 +245,34 @@
     showFeedback('Alerte supprimée.', 'success');
   }
 
+  // ---- AUTH HEADER ----
+  // Le serveur exige Basic Auth sur toutes les routes /api/*
+  function authHeader() {
+    // Récupère les credentials depuis window (injectés par server.py dans le HTML) ou prompt
+    const creds = window._appCreds || '';
+    return creds ? { 'Authorization': 'Basic ' + btoa(creds) } : {};
+  }
+
   // ---- SEND NOW ----
   async function sendNow(id, btn) {
     btn.disabled = true;
     btn.textContent = '⏳';
 
     try {
-      const resp = await fetch(`${API_ALERTS}/${id}/send`, { method: 'POST' });
+      const resp = await fetch(`${API_ALERTS}/${id}/send`, {
+        method: 'POST',
+        headers: authHeader()
+      });
       const data = await resp.json().catch(() => ({}));
       if (resp.ok) {
-        showFeedback('Email envoyé avec succès !', 'success');
+        showFeedback('✅ Email envoyé !', 'success');
+      } else if (resp.status === 401) {
+        showFeedback('❌ Erreur d\'authentification.', 'error');
       } else {
-        showFeedback(`Erreur : ${data.error || resp.status}`, 'error');
+        showFeedback(`❌ Erreur : ${data.error || resp.statusText}`, 'error');
       }
-    } catch (_) {
-      showFeedback('Serveur inaccessible.', 'error');
+    } catch (e) {
+      showFeedback(`❌ ${e.message || 'Serveur inaccessible.'}`, 'error');
     } finally {
       btn.disabled = false;
       btn.textContent = '📤 Envoyer';
@@ -267,33 +280,44 @@
   }
 
   // ---- SYNC TO BACKEND ----
-  function syncAlertToBackend(alertData) {
-    fetch(API_ALERTS, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(alertData)
-    }).catch(() => {}); // silencieux si serveur absent
+  async function syncAlertToBackend(alertData) {
+    try {
+      const resp = await fetch(API_ALERTS, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify(alertData)
+      });
+      if (!resp.ok) console.warn('[alerts] sync échouée :', resp.status);
+    } catch (e) {
+      console.warn('[alerts] sync échouée :', e.message);
+    }
   }
 
   function syncDeleteToBackend(id) {
-    fetch(`${API_ALERTS}/${id}`, { method: 'DELETE' }).catch(() => {});
+    fetch(`${API_ALERTS}/${id}`, {
+      method: 'DELETE',
+      headers: authHeader()
+    }).catch(e => console.warn('[alerts] delete échouée :', e.message));
   }
 
   // ---- CHECK SERVER STATUS ----
   async function checkServerStatus() {
     try {
-      const resp = await fetch('/api/status', { signal: AbortSignal.timeout(4000) });
+      const resp = await fetch('/api/status', {
+        headers: authHeader(),
+        signal: AbortSignal.timeout(5000)
+      });
       const data = await resp.json().catch(() => ({}));
       if (resp.ok) {
         serverStatusBar.className = 'alert-info-box ok';
-        serverStatusBar.textContent = `✅ Serveur connecté${data.smtp ? ' — SMTP actif' : ' — SMTP non configuré (emails désactivés)'}`;
+        serverStatusBar.textContent = `✅ Serveur connecté — SMTP ${data.smtp ? 'actif ✓' : 'non configuré (emails désactivés)'}`;
       } else {
         serverStatusBar.className = 'alert-info-box warn';
-        serverStatusBar.textContent = '⚠️ Serveur en erreur.';
+        serverStatusBar.textContent = '⚠️ Serveur en erreur (' + resp.status + ').';
       }
     } catch (_) {
-      serverStatusBar.className = 'alert-info-box error';
-      serverStatusBar.textContent = '🔴 Serveur non disponible. Les alertes sont sauvegardées localement.';
+      serverStatusBar.className = 'alert-info-box warn';
+      serverStatusBar.textContent = '⚠️ Serveur non disponible. Les alertes sont sauvegardées localement.';
     }
   }
 
