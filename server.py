@@ -24,12 +24,23 @@ from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+import socket
+
 # Certificats SSL via certifi (requis sur Render/Linux) ou fallback
 try:
     import certifi
     _SSL_CAFILE = certifi.where()
 except ImportError:
     _SSL_CAFILE = None
+
+# Forcer IPv4 sur Render (évite [Errno 101] Network is unreachable sur IPv6)
+# On remplace getaddrinfo pour ne retourner que les adresses AF_INET
+if os.environ.get('RENDER') == 'true':
+    _orig_getaddrinfo = socket.getaddrinfo
+    def _ipv4_getaddrinfo(host, port, family=0, *args, **kwargs):
+        return _orig_getaddrinfo(host, port, socket.AF_INET, *args, **kwargs)
+    socket.getaddrinfo = _ipv4_getaddrinfo
+    print('[server] IPv6 désactivé — mode IPv4 uniquement (Render)', file=sys.stderr)
 
 
 # ──────────────────────────────────────────────
