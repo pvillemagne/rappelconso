@@ -24,6 +24,13 @@ from datetime import datetime, timezone, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
+# Certificats SSL via certifi (requis sur Render/Linux) ou fallback
+try:
+    import certifi
+    _SSL_CAFILE = certifi.where()
+except ImportError:
+    _SSL_CAFILE = None
+
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -42,9 +49,16 @@ PROXY_TTL     = 600  # secondes
 _proxy_cache  = {}   # url -> (timestamp, data_bytes)
 _proxy_pending = set()
 
-_ssl_ctx_proxy = ssl.create_default_context()
-_ssl_ctx_proxy.check_hostname = False
-_ssl_ctx_proxy.verify_mode    = ssl.CERT_NONE
+def _make_ssl_ctx():
+    """Crée un contexte SSL avec certifi si disponible, sinon désactive la vérification."""
+    if _SSL_CAFILE:
+        return ssl.create_default_context(cafile=_SSL_CAFILE)
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode    = ssl.CERT_NONE
+    return ctx
+
+_ssl_ctx_proxy = _make_ssl_ctx()
 
 
 def _normalize_url(url):
@@ -134,9 +148,7 @@ API_BASE  = REMOTE_API
 
 SCHEDULER_INTERVAL = 3600  # secondes
 
-_ssl_ctx = ssl.create_default_context()
-_ssl_ctx.check_hostname = False
-_ssl_ctx.verify_mode    = ssl.CERT_NONE
+_ssl_ctx = _make_ssl_ctx()
 
 
 # ──────────────────────────────────────────────
