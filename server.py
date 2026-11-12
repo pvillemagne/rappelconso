@@ -83,12 +83,15 @@ def _normalize_url(url):
 def _do_fetch(url, cache_key):
     """Fetch HTTP bloquant, stocke en cache."""
     try:
-        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, context=_ssl_ctx_proxy, timeout=30) as resp:
+        req = urllib.request.Request(url, headers={
+            'Accept': 'application/json',
+            'Accept-Encoding': 'identity'
+        })
+        with urllib.request.urlopen(req, context=_ssl_ctx_proxy, timeout=60) as resp:
             data = resp.read()
         _proxy_cache[cache_key] = (time.time(), data)
     except Exception as exc:
-        print(f'[proxy] fetch error {url}: {exc}', file=sys.stderr)
+        print(f'[proxy] fetch error {url}: {type(exc).__name__}: {exc}', file=sys.stderr)
     finally:
         _proxy_pending.discard(cache_key)
 
@@ -263,14 +266,23 @@ def fetch_rappels(alert):
     })
     url = f'{API_BASE}/records?{params}'
 
-    try:
-        req = urllib.request.Request(url, headers={'Accept': 'application/json'})
-        with urllib.request.urlopen(req, context=_ssl_ctx, timeout=30) as resp:
-            data = json.loads(resp.read())
-        return data.get('results', [])
-    except Exception as exc:
-        print(f'[fetch_rappels] {exc}', file=sys.stderr)
-        return []
+    headers = {
+        'Accept':          'application/json',
+        'Accept-Encoding': 'identity',
+    }
+    req = urllib.request.Request(url, headers=headers)
+
+    # 2 tentatives avec timeout progressif (Render peut être lent)
+    for attempt, timeout in enumerate([45, 90], 1):
+        try:
+            with urllib.request.urlopen(req, context=_ssl_ctx, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+            return data.get('results', [])
+        except Exception as exc:
+            print(f'[fetch_rappels] tentative {attempt} échouée ({type(exc).__name__}: {exc})', file=sys.stderr)
+            if attempt < 2:
+                time.sleep(3)
+    return []
 
 
 # ──────────────────────────────────────────────
