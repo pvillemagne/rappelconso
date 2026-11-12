@@ -426,13 +426,20 @@ def send_email(to, subject, html):
 
 def _send_via_sendgrid(to, subject, html):
     """Envoi via l'API HTTP SendGrid (port 443 — toujours ouvert)."""
-    from_addr = SMTP_FROM or SMTP_USER or 'noreply@rappelconso.app'
-    payload = json.dumps({
+    # Adresse expéditeur : utiliser SMTP_FROM/SMTP_USER si défini,
+    # sinon l'adresse par défaut SendGrid vérifiée
+    from_addr = SMTP_FROM or SMTP_USER or ''
+    payload_dict = {
         'personalizations': [{'to': [{'email': to}]}],
-        'from':    {'email': from_addr},
+        'from':    {'email': from_addr, 'name': 'RappelConso'},
         'subject': subject,
         'content': [{'type': 'text/html', 'value': html}]
-    }).encode('utf-8')
+    }
+    if from_addr:
+        payload_dict['reply_to'] = {'email': from_addr}
+
+    payload = json.dumps(payload_dict).encode('utf-8')
+    print(f'[sendgrid] envoi de={from_addr} à={to} sujet={subject[:50]}', file=sys.stderr)
 
     req = urllib.request.Request(
         'https://api.sendgrid.com/v3/mail/send',
@@ -446,11 +453,12 @@ def _send_via_sendgrid(to, subject, html):
     try:
         with urllib.request.urlopen(req, context=_make_ssl_ctx(), timeout=30) as resp:
             status = resp.status
+        print(f'[sendgrid] HTTP {status} — envoyé via SendGrid → {to}', file=sys.stderr)
         if status not in (200, 202):
             raise RuntimeError(f'SendGrid HTTP {status}')
-        print(f'[email] envoyé via SendGrid → {to}', file=sys.stderr)
     except urllib.error.HTTPError as e:
         body = e.read().decode('utf-8', errors='replace')
+        print(f'[sendgrid] erreur HTTP {e.code} : {body}', file=sys.stderr)
         raise RuntimeError(f'SendGrid erreur {e.code} : {body}')
 
 
