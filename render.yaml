@@ -21,5 +21,7 @@ services:
         sync: false
       - key: SMTP_FROM
         sync: false
+      - key: SENDGRID_API_KEY
+        sync: false
       - key: RENDER
         value: "true"

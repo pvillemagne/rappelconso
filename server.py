@@ -17,6 +17,7 @@ import time
 import webbrowser
 import urllib.request
 import urllib.parse
+import urllib.error
 import ssl
 import pathlib
 import base64
@@ -174,11 +175,12 @@ def load_env():
 
 load_env()
 
-SMTP_HOST = os.environ.get('SMTP_HOST', '')
-SMTP_PORT = int(os.environ.get('SMTP_PORT', 587))
-SMTP_USER = os.environ.get('SMTP_USER', '')
-SMTP_PASS = os.environ.get('SMTP_PASS', '')
-SMTP_FROM = os.environ.get('SMTP_FROM', SMTP_USER)
+SMTP_HOST      = os.environ.get('SMTP_HOST', '')
+SMTP_PORT      = int(os.environ.get('SMTP_PORT', 587))
+SMTP_USER      = os.environ.get('SMTP_USER', '')
+SMTP_PASS      = os.environ.get('SMTP_PASS', '')
+SMTP_FROM      = os.environ.get('SMTP_FROM', SMTP_USER)
+SENDGRID_KEY   = os.environ.get('SENDGRID_API_KEY', '')
 
 APP_USER  = os.environ.get('APP_USER', 'admin')
 APP_PASS  = os.environ.get('APP_PASS', 'rappelconso2024')
@@ -408,27 +410,64 @@ def build_email_html(alert, rappels):
 
 
 def send_email(to, subject, html):
-    if not SMTP_HOST or not SMTP_USER:
-        raise RuntimeError('SMTP non configuré (SMTP_HOST / SMTP_USER manquants)')
+    """Envoie un email — SendGrid API (HTTPS) en priorité, fallback SMTP."""
 
+    # ── SendGrid via HTTPS (fonctionne sur Render même si ports SMTP bloqués) ──
+    if SENDGRID_KEY:
+        _send_via_sendgrid(to, subject, html)
+        return
+
+    # ── Fallback SMTP ──
+    if not SMTP_HOST or not SMTP_USER:
+        raise RuntimeError('Aucun moyen d\'envoi configuré (SENDGRID_API_KEY ou SMTP_HOST manquant)')
+
+    _send_via_smtp(to, subject, html)
+
+
+def _send_via_sendgrid(to, subject, html):
+    """Envoi via l'API HTTP SendGrid (port 443 — toujours ouvert)."""
+    from_addr = SMTP_FROM or SMTP_USER or 'noreply@rappelconso.app'
+    payload = json.dumps({
+        'personalizations': [{'to': [{'email': to}]}],
+        'from':    {'email': from_addr},
+        'subject': subject,
+        'content': [{'type': 'text/html', 'value': html}]
+    }).encode('utf-8')
+
+    req = urllib.request.Request(
+        'https://api.sendgrid.com/v3/mail/send',
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {SENDGRID_KEY}',
+            'Content-Type':  'application/json'
+        },
+        method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, context=_make_ssl_ctx(), timeout=30) as resp:
+            status = resp.status
+        if status not in (200, 202):
+            raise RuntimeError(f'SendGrid HTTP {status}')
+        print(f'[email] envoyé via SendGrid → {to}', file=sys.stderr)
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        raise RuntimeError(f'SendGrid erreur {e.code} : {body}')
+
+
+def _send_via_smtp(to, subject, html):
+    """Envoi via SMTP avec fallback SSL:465 / STARTTLS:587."""
     msg = MIMEMultipart('alternative')
     msg['Subject'] = subject
     msg['From']    = SMTP_FROM or SMTP_USER
     msg['To']      = to
     msg.attach(MIMEText(html, 'html', 'utf-8'))
 
-    ssl_ctx = _make_ssl_ctx()
+    ssl_ctx   = _make_ssl_ctx()
     from_addr = SMTP_FROM or SMTP_USER
-    last_exc = None
+    last_exc  = None
 
-    # Stratégie : essayer SSL direct (465) puis STARTTLS (587) puis 25
-    strategies = []
-    if SMTP_PORT == 465:
-        strategies = [('ssl', 465), ('starttls', 587)]
-    elif SMTP_PORT == 587:
-        strategies = [('starttls', 587), ('ssl', 465)]
-    else:
-        strategies = [('starttls', SMTP_PORT), ('ssl', 465), ('starttls', 587)]
+    strategies = [('ssl', 465), ('starttls', 587)] if SMTP_PORT == 465 \
+            else [('starttls', 587), ('ssl', 465)]
 
     for method, port in strategies:
         try:
@@ -438,20 +477,18 @@ def send_email(to, subject, html):
                     smtp.sendmail(from_addr, to, msg.as_string())
             else:
                 with smtplib.SMTP(SMTP_HOST, port, timeout=20) as smtp:
-                    smtp.ehlo()
-                    smtp.starttls(context=ssl_ctx)
-                    smtp.ehlo()
+                    smtp.ehlo(); smtp.starttls(context=ssl_ctx); smtp.ehlo()
                     smtp.login(SMTP_USER, SMTP_PASS)
                     smtp.sendmail(from_addr, to, msg.as_string())
-            print(f'[smtp] envoyé via {method}:{port}', file=sys.stderr)
-            return  # succès
+            print(f'[email] envoyé via SMTP {method}:{port} → {to}', file=sys.stderr)
+            return
         except smtplib.SMTPAuthenticationError as e:
-            raise RuntimeError(f'Erreur authentification SMTP ({method}:{port}) : {e}')
+            raise RuntimeError(f'Authentification SMTP échouée : {e}')
         except Exception as e:
             print(f'[smtp] échec {method}:{port} — {type(e).__name__}: {e}', file=sys.stderr)
             last_exc = e
 
-    raise RuntimeError(f'Impossible d\'envoyer l\'email (toutes stratégies échouées) : {last_exc}')
+    raise RuntimeError(f'SMTP échoué sur tous les ports : {last_exc}')
 
 
 def esc(s):
@@ -555,9 +592,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         # /api/status
         if path == '/api/status':
             self.json_response({
-                'ok':   True,
-                'smtp': bool(SMTP_HOST and SMTP_USER),
-                'time': utcnow().isoformat()
+                'ok':      True,
+                'smtp':    bool(SENDGRID_KEY or (SMTP_HOST and SMTP_USER)),
+                'sendgrid': bool(SENDGRID_KEY),
+                'time':    utcnow().isoformat()
             })
             return
 
