@@ -181,6 +181,7 @@ SMTP_USER      = os.environ.get('SMTP_USER', '')
 SMTP_PASS      = os.environ.get('SMTP_PASS', '')
 SMTP_FROM      = os.environ.get('SMTP_FROM', SMTP_USER)
 SENDGRID_KEY   = os.environ.get('SENDGRID_API_KEY', '')
+RESEND_KEY     = os.environ.get('RESEND_API_KEY', '')
 
 APP_USER  = os.environ.get('APP_USER', 'admin')
 APP_PASS  = os.environ.get('APP_PASS', 'rappelconso2024')
@@ -410,18 +411,61 @@ def build_email_html(alert, rappels):
 
 
 def send_email(to, subject, html):
-    """Envoie un email — SendGrid API (HTTPS) en priorité, fallback SMTP."""
+    """Envoie un email — Resend > SendGrid > SMTP (fallback)."""
 
-    # ── SendGrid via HTTPS (fonctionne sur Render même si ports SMTP bloqués) ──
+    if RESEND_KEY:
+        _send_via_resend(to, subject, html)
+        return
+
     if SENDGRID_KEY:
         _send_via_sendgrid(to, subject, html)
         return
 
-    # ── Fallback SMTP ──
     if not SMTP_HOST or not SMTP_USER:
-        raise RuntimeError('Aucun moyen d\'envoi configuré (SENDGRID_API_KEY ou SMTP_HOST manquant)')
+        raise RuntimeError('Aucun moyen d\'envoi configuré (RESEND_API_KEY, SENDGRID_API_KEY ou SMTP_HOST manquant)')
 
     _send_via_smtp(to, subject, html)
+
+
+def _send_via_resend(to, subject, html):
+    """Envoi via Resend API (HTTPS — pas de problème DMARC Gmail)."""
+    # Resend fournit onboarding@resend.dev utilisable sans vérification de domaine
+    reply_to  = SMTP_FROM or SMTP_USER or ''
+    from_addr = reply_to if reply_to and not reply_to.endswith('@gmail.com') \
+                else 'RappelConso <onboarding@resend.dev>'
+
+    payload_dict = {
+        'from':    from_addr,
+        'to':      [to],
+        'subject': subject,
+        'html':    html,
+    }
+    if reply_to:
+        payload_dict['reply_to'] = reply_to
+
+    payload = json.dumps(payload_dict).encode('utf-8')
+    print(f'[resend] envoi de={from_addr} à={to}', file=sys.stderr)
+
+    req = urllib.request.Request(
+        'https://api.resend.com/emails',
+        data=payload,
+        headers={
+            'Authorization': f'Bearer {RESEND_KEY}',
+            'Content-Type':  'application/json'
+        },
+        method='POST'
+    )
+    try:
+        with urllib.request.urlopen(req, context=_make_ssl_ctx(), timeout=30) as resp:
+            status = resp.status
+            body   = resp.read().decode('utf-8', errors='replace')
+        print(f'[resend] HTTP {status} — {body[:100]}', file=sys.stderr)
+        if status not in (200, 201):
+            raise RuntimeError(f'Resend HTTP {status} : {body}')
+    except urllib.error.HTTPError as e:
+        body = e.read().decode('utf-8', errors='replace')
+        print(f'[resend] erreur HTTP {e.code} : {body}', file=sys.stderr)
+        raise RuntimeError(f'Resend erreur {e.code} : {body}')
 
 
 def _send_via_sendgrid(to, subject, html):
@@ -601,8 +645,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == '/api/status':
             self.json_response({
                 'ok':      True,
-                'smtp':    bool(SENDGRID_KEY or (SMTP_HOST and SMTP_USER)),
+                'smtp':    bool(RESEND_KEY or SENDGRID_KEY or (SMTP_HOST and SMTP_USER)),
                 'sendgrid': bool(SENDGRID_KEY),
+                'resend':  bool(RESEND_KEY),
                 'time':    utcnow().isoformat()
             })
             return
