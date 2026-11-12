@@ -26,21 +26,36 @@ from email.mime.text import MIMEText
 
 import socket
 
-# Certificats SSL via certifi (requis sur Render/Linux) ou fallback
+# Certificats SSL via certifi
 try:
     import certifi
     _SSL_CAFILE = certifi.where()
 except ImportError:
     _SSL_CAFILE = None
 
+# requests pour les appels API sortants (meilleure gestion TCP que urllib sur Render)
+try:
+    import requests as _requests
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.retry import Retry
+    _session = _requests.Session()
+    _retry = Retry(total=3, backoff_factor=1, status_forcelist=[500, 502, 503, 504])
+    _adapter = HTTPAdapter(max_retries=_retry, pool_connections=4, pool_maxsize=8)
+    _session.mount('https://', _adapter)
+    _session.mount('http://', _adapter)
+    _USE_REQUESTS = True
+    print('[server] requests disponible — utilisation pour les appels API', file=sys.stderr)
+except ImportError:
+    _USE_REQUESTS = False
+    print('[server] requests non disponible — fallback urllib', file=sys.stderr)
+
 # Forcer IPv4 sur Render (évite [Errno 101] Network is unreachable sur IPv6)
-# On remplace getaddrinfo pour ne retourner que les adresses AF_INET
 if os.environ.get('RENDER') == 'true':
     _orig_getaddrinfo = socket.getaddrinfo
     def _ipv4_getaddrinfo(host, port, family=0, *args, **kwargs):
         return _orig_getaddrinfo(host, port, socket.AF_INET, *args, **kwargs)
     socket.getaddrinfo = _ipv4_getaddrinfo
-    print('[server] IPv6 désactivé — mode IPv4 uniquement (Render)', file=sys.stderr)
+    print('[server] IPv4 uniquement (Render)', file=sys.stderr)
 
 
 # ──────────────────────────────────────────────
@@ -80,15 +95,25 @@ def _normalize_url(url):
     return parsed._replace(query=new_query).geturl()
 
 
+def _http_get(url, timeout=60):
+    """Appel HTTP GET — utilise requests si disponible, sinon urllib."""
+    headers = {'Accept': 'application/json', 'Accept-Encoding': 'identity'}
+    if _USE_REQUESTS:
+        resp = _session.get(url, headers=headers, timeout=timeout,
+                            verify=_SSL_CAFILE or True)
+        resp.raise_for_status()
+        return resp.content
+    else:
+        ctx = _make_ssl_ctx()
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+            return r.read()
+
+
 def _do_fetch(url, cache_key):
     """Fetch HTTP bloquant, stocke en cache."""
     try:
-        req = urllib.request.Request(url, headers={
-            'Accept': 'application/json',
-            'Accept-Encoding': 'identity'
-        })
-        with urllib.request.urlopen(req, context=_ssl_ctx_proxy, timeout=60) as resp:
-            data = resp.read()
+        data = _http_get(url, timeout=60)
         _proxy_cache[cache_key] = (time.time(), data)
     except Exception as exc:
         print(f'[proxy] fetch error {url}: {type(exc).__name__}: {exc}', file=sys.stderr)
@@ -266,22 +291,15 @@ def fetch_rappels(alert):
     })
     url = f'{API_BASE}/records?{params}'
 
-    headers = {
-        'Accept':          'application/json',
-        'Accept-Encoding': 'identity',
-    }
-    req = urllib.request.Request(url, headers=headers)
-
-    # 2 tentatives avec timeout progressif (Render peut être lent)
+    # 2 tentatives avec timeout progressif
     for attempt, timeout in enumerate([45, 90], 1):
         try:
-            with urllib.request.urlopen(req, context=_ssl_ctx, timeout=timeout) as resp:
-                data = json.loads(resp.read())
+            data = json.loads(_http_get(url, timeout=timeout))
             return data.get('results', [])
         except Exception as exc:
-            print(f'[fetch_rappels] tentative {attempt} échouée ({type(exc).__name__}: {exc})', file=sys.stderr)
+            print(f'[fetch_rappels] tentative {attempt} ({type(exc).__name__}: {exc})', file=sys.stderr)
             if attempt < 2:
-                time.sleep(3)
+                time.sleep(5)
     return []
 
 
