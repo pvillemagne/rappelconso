@@ -254,29 +254,84 @@
   }
 
   // ---- SEND NOW ----
+  // Le navigateur récupère les rappels (API France accessible depuis ici),
+  // puis les envoie au serveur qui n'a plus qu'à faire le SMTP
   async function sendNow(id, btn) {
     btn.disabled = true;
-    btn.textContent = '⏳';
+    btn.textContent = '⏳ Récupération…';
 
     try {
+      // 1. Récupérer l'alerte depuis localStorage
+      const alerts = loadAlerts();
+      const alert  = alerts.find(a => a.id === id);
+      if (!alert) { showFeedback('❌ Alerte introuvable.', 'error'); return; }
+
+      // 2. Construire le where et appeler l'API depuis le navigateur
+      const rappels = await fetchRappelsForAlert(alert);
+
+      if (!rappels.length) {
+        showFeedback('ℹ️ Aucun rappel récent trouvé pour cette alerte.', 'success');
+        return;
+      }
+
+      btn.textContent = `⏳ Envoi (${rappels.length})…`;
+
+      // 3. Envoyer les rappels au serveur → SMTP
       const resp = await fetch(`${API_ALERTS}/${id}/send`, {
-        method: 'POST',
-        headers: authHeader()
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body:    JSON.stringify({ rappels })
       });
       const data = await resp.json().catch(() => ({}));
-      if (resp.ok) {
-        showFeedback('✅ Email envoyé !', 'success');
+
+      if (resp.ok && data.ok) {
+        showFeedback(`✅ Email envoyé (${data.sent || rappels.length} rappel(s)) !`, 'success');
       } else if (resp.status === 401) {
         showFeedback('❌ Erreur d\'authentification.', 'error');
       } else {
-        showFeedback(`❌ Erreur : ${data.error || resp.statusText}`, 'error');
+        showFeedback(`❌ Erreur SMTP : ${data.error || resp.statusText}`, 'error');
       }
     } catch (e) {
-      showFeedback(`❌ ${e.message || 'Serveur inaccessible.'}`, 'error');
+      showFeedback(`❌ ${e.message || 'Erreur inattendue.'}`, 'error');
     } finally {
       btn.disabled = false;
       btn.textContent = '📤 Envoyer';
     }
+  }
+
+  // Récupère les rappels récents correspondant à l'alerte via l'API publique
+  async function fetchRappelsForAlert(alert) {
+    const BASE = 'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/rappelconso-v2-gtin-espaces/records';
+    const clauses = [];
+
+    if (alert.categorie)    clauses.push(`categorie_produit = '${alert.categorie.replace(/'/g,"''")}'`);
+    if (alert.zone)         clauses.push(`zone_geographique_de_vente LIKE '%${alert.zone.replace(/'/g,"''")}%'`);
+    if (alert.distributeur) clauses.push(`distributeurs LIKE '%${alert.distributeur.replace(/'/g,"''")}%'`);
+    if (alert.keywords) {
+      alert.keywords.split(',').forEach(kw => {
+        kw = kw.trim().replace(/'/g, "''");
+        if (kw) clauses.push(`(libelle LIKE '%${kw}%' OR motif_rappel LIKE '%${kw}%' OR marque_produit LIKE '%${kw}%')`);
+      });
+    }
+
+    // 7 derniers jours
+    const since = new Date();
+    since.setDate(since.getDate() - 7);
+    clauses.push(`date_publication >= '${since.toISOString().slice(0,10)}T00:00:00'`);
+
+    const params = new URLSearchParams({
+      limit:    '50',
+      order_by: 'date_publication DESC',
+      timezone: 'Europe/Paris',
+      where:    clauses.join(' AND ')
+    });
+
+    const resp = await fetch(`${BASE}?${params}`, {
+      headers: { 'Accept': 'application/json' }
+    });
+    if (!resp.ok) throw new Error(`API ${resp.status}`);
+    const data = await resp.json();
+    return data.results || [];
   }
 
   // ---- SYNC TO BACKEND ----

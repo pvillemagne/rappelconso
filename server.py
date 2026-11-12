@@ -586,6 +586,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         path   = parsed.path
 
         # /api/alerts/:id/send
+        # Le navigateur envoie les rappels dans le body (JSON) — le serveur envoie juste le SMTP
         if path.startswith('/api/alerts/') and path.endswith('/send'):
             alert_id = path.split('/')[-2]
             alerts   = db_all()
@@ -594,20 +595,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.error_response('Alerte introuvable', 404)
                 return
 
-            def do_send():
+            try:
+                body = self.read_json()
+                rappels = body.get('rappels', [])
+            except Exception:
+                rappels = []
+
+            if not rappels:
+                # Fallback : le serveur essaie lui-même de récupérer les rappels
                 try:
                     rappels = fetch_rappels(alert)
-                    if not rappels:
-                        return  # rien à envoyer
-                    html    = build_email_html(alert, rappels)
-                    subject = f"[RappelConso] Test — {alert.get('name','')}"
-                    send_email(alert['email'], subject, html)
-                    db_mark_sent(alert['id'], next_send(alert.get('freq','weekly')))
                 except Exception as exc:
-                    print(f'[send] {exc}', file=sys.stderr)
+                    print(f'[send] fetch_rappels: {exc}', file=sys.stderr)
 
-            threading.Thread(target=do_send, daemon=True).start()
-            self.json_response({'ok': True, 'queued': True})
+            if not rappels:
+                self.json_response({'ok': False, 'error': 'Aucun rappel trouvé'}, 200)
+                return
+
+            try:
+                html    = build_email_html(alert, rappels)
+                subject = f"[RappelConso] {len(rappels)} rappel(s) — {alert.get('name','')}"
+                send_email(alert['email'], subject, html)
+                db_mark_sent(alert['id'], next_send(alert.get('freq', 'weekly')))
+                self.json_response({'ok': True, 'sent': len(rappels)})
+            except Exception as exc:
+                print(f'[send] {exc}', file=sys.stderr)
+                self.error_response(str(exc), 500)
             return
 
         # /api/alerts (upsert)
