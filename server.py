@@ -417,15 +417,41 @@ def send_email(to, subject, html):
     msg['To']      = to
     msg.attach(MIMEText(html, 'html', 'utf-8'))
 
-    try:
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as smtp:
-            smtp.ehlo()
-            smtp.starttls()
-            smtp.ehlo()
-            smtp.login(SMTP_USER, SMTP_PASS)
-            smtp.sendmail(SMTP_FROM or SMTP_USER, to, msg.as_string())
-    except smtplib.SMTPAuthenticationError as e:
-        raise RuntimeError(f'Erreur authentification SMTP : {e}')
+    ssl_ctx = _make_ssl_ctx()
+    from_addr = SMTP_FROM or SMTP_USER
+    last_exc = None
+
+    # Stratégie : essayer SSL direct (465) puis STARTTLS (587) puis 25
+    strategies = []
+    if SMTP_PORT == 465:
+        strategies = [('ssl', 465), ('starttls', 587)]
+    elif SMTP_PORT == 587:
+        strategies = [('starttls', 587), ('ssl', 465)]
+    else:
+        strategies = [('starttls', SMTP_PORT), ('ssl', 465), ('starttls', 587)]
+
+    for method, port in strategies:
+        try:
+            if method == 'ssl':
+                with smtplib.SMTP_SSL(SMTP_HOST, port, timeout=20, context=ssl_ctx) as smtp:
+                    smtp.login(SMTP_USER, SMTP_PASS)
+                    smtp.sendmail(from_addr, to, msg.as_string())
+            else:
+                with smtplib.SMTP(SMTP_HOST, port, timeout=20) as smtp:
+                    smtp.ehlo()
+                    smtp.starttls(context=ssl_ctx)
+                    smtp.ehlo()
+                    smtp.login(SMTP_USER, SMTP_PASS)
+                    smtp.sendmail(from_addr, to, msg.as_string())
+            print(f'[smtp] envoyé via {method}:{port}', file=sys.stderr)
+            return  # succès
+        except smtplib.SMTPAuthenticationError as e:
+            raise RuntimeError(f'Erreur authentification SMTP ({method}:{port}) : {e}')
+        except Exception as e:
+            print(f'[smtp] échec {method}:{port} — {type(e).__name__}: {e}', file=sys.stderr)
+            last_exc = e
+
+    raise RuntimeError(f'Impossible d\'envoyer l\'email (toutes stratégies échouées) : {last_exc}')
 
 
 def esc(s):
